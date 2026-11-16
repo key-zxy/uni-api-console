@@ -99,5 +99,79 @@ class GenericBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(self.config_path.exists())
 
 
+class StoredCredentialDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    """Editing an existing channel must reuse the stored credential."""
+
+    async def asyncSetUp(self):
+        self.tmp = tempfile.TemporaryDirectory(dir='.')
+        self.catalog_calls = []
+        self.write_calls = []
+
+        async def upstream(request):
+            if request.path == '/v1/api_config':
+                port = self.upstream.port
+                return web.json_response({'api_config': {
+                    'providers': [{
+                        'provider': 'saved',
+                        'base_url': f'http://127.0.0.1:{port}/prov/v1',
+                        'api': 'stored-secret',
+                        'model': [{'upstream-a': 'saved/upstream-a'}],
+                    }],
+                    'api_keys': [{'api': 'admin-secret', 'role': 'admin', 'model': ['all']}],
+                }})
+            if request.path == '/v1/api_config/update':
+                self.write_calls.append(request.path)
+                return web.json_response({'message': 'updated'})
+            self.catalog_calls.append((request.path, request.headers.get('Authorization')))
+            return web.json_response({'data': [{'id': 'upstream-a'}, {'id': 'upstream-b'}]})
+
+        upstream_app = web.Application()
+        upstream_app.router.add_route('*', '/{path:.*}', upstream)
+        self.upstream = TestServer(upstream_app)
+        await self.upstream.start_server()
+        settings = Settings(
+            str(self.upstream.make_url('').with_path('').with_query('')).rstrip('/'),
+            'ui-admin-token',
+            db=str(Path(self.tmp.name) / 'audit.sqlite3'),
+            management_key='admin-secret',
+        )
+        self.client = TestClient(TestServer(create_app(settings)))
+        await self.client.start_server()
+        self.auth = {'Authorization': 'Bearer ui-admin-token'}
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        await self.upstream.close()
+        self.tmp.cleanup()
+
+    async def test_discovery_uses_stored_credential_without_echo_or_write(self):
+        unauthenticated = await self.client.post('/_audit/api/manage', json={'action': 'provider_discover', 'provider': 'saved'})
+        self.assertEqual(unauthenticated.status, 401)
+
+        response = await self.client.post('/_audit/api/manage',
+                                          json={'action': 'provider_discover', 'provider': 'saved'},
+                                          headers=self.auth)
+        self.assertEqual(response.status, 200)
+        payload = await response.json()
+        self.assertEqual(payload['models'], ['upstream-a', 'upstream-b'])
+        self.assertNotIn('stored-secret', json.dumps(payload))
+        # The provider catalog request carried the stored credential, not a browser value.
+        self.assertTrue(self.catalog_calls, 'expected a provider /models request')
+        self.assertTrue(all(auth == 'Bearer stored-secret' for _, auth in self.catalog_calls),
+                        self.catalog_calls)
+        # Discovery is read-only: no native configuration write may happen.
+        self.assertEqual(self.write_calls, [])
+
+        unknown = await self.client.post('/_audit/api/manage',
+                                         json={'action': 'provider_discover', 'provider': 'missing'},
+                                         headers=self.auth)
+        self.assertEqual(unknown.status, 400)
+        # A browser-supplied key is not part of this action's contract.
+        extra = await self.client.post('/_audit/api/manage',
+                                       json={'action': 'provider_discover', 'provider': 'saved', 'api': 'typed'},
+                                       headers=self.auth)
+        self.assertEqual(extra.status, 400)
+
+
 if __name__ == '__main__':
     unittest.main()

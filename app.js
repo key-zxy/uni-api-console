@@ -557,7 +557,7 @@ function getDragAfterElement(container, y) {
   }, { offset: Number.NEGATIVE_INFINITY }).element;
 }
 
-function modelPicker(prefix) {
+function modelPicker(prefix, existing) {
   let models = [], checked = new Set(), generation = 0;
   const input = suffix => $(prefix + '-' + suffix);
   const clear = () => {
@@ -581,23 +581,34 @@ function modelPicker(prefix) {
     }
   };
   input('discover').onclick = async () => {
-    if (!input('key').value) { input('discovery-status').textContent = '请输入此目标上游的 Key 以获取模型列表；也可继续手动输入。'; return; }
+    // Editing an existing channel: reuse the credential the server already
+    // stores — the plaintext is never rendered back to the browser. A key typed
+    // into the field still takes precedence (e.g. to validate a replacement).
+    const runWith = existing && !input('key').value ? existing() : '';
     const version = ++generation;
+    if (!runWith && !input('key').value) { input('discovery-status').textContent = '请输入此目标上游的 Key 以获取模型列表；也可继续手动输入。'; return; }
     input('discover').disabled = true;
-    input('discovery-status').textContent = '正在请求模型目录…';
-    const payload = {base_url: input('url').value, models_url: input('models-url').value, api: input('key').value};
+    input('discovery-status').textContent = runWith ? '正在用已保存的 Key 请求模型目录…' : '正在请求模型目录…';
+    const modelsUrl = input('models-url').value;
+    const payload = runWith
+      ? {action: 'provider_discover', provider: runWith, models_url: modelsUrl}
+      : {base_url: input('url').value, models_url: modelsUrl, api: input('key').value};
     try {
-      const result = await api('models/discover', {method: 'POST', body: JSON.stringify(payload)});
+      const result = runWith
+        ? await api('manage', {method: 'POST', body: JSON.stringify(payload)})
+        : await api('models/discover', {method: 'POST', body: JSON.stringify(payload)});
       if (version !== generation) return;
       models = result.models;
       render();
-      input('discovery-status').textContent = `获取 ${models.length} 个模型；请自行勾选，目录不代表价格或调用权限。`;
+      input('discovery-status').textContent = runWith
+        ? `已用保存的 Key 获取 ${models.length} 个模型；请自行勾选，目录不代表价格或调用权限。`
+        : `获取 ${models.length} 个模型；请自行勾选，目录不代表价格或调用权限。`;
     } catch (error) {
       if (version === generation) {
         input('model-options').replaceChildren();
         input('discovery-status').textContent = error.message;
       }
-    } finally { payload.api = ''; input('discover').disabled = false; }
+    } finally { delete payload.api; delete payload.action; input('discover').disabled = false; }
   };
   input('model-search').oninput = render;
   input('model-add').onclick = () => {
@@ -609,7 +620,7 @@ function modelPicker(prefix) {
   for (const suffix of ['url', 'models-url', 'key']) input(suffix).oninput = clear;
   return clear;
 }
-const clearModelPickers = [modelPicker('setup'), modelPicker('provider')];
+const clearModelPickers = [modelPicker('setup'), modelPicker('provider', () => $('provider-name').readOnly ? $('provider-name').value : '')];
 
 function openProvider(provider) {
   clearModelPickers[1]();

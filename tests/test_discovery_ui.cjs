@@ -31,6 +31,29 @@ vm.runInNewContext(fs.readFileSync('app.js','utf8'),context);
   assert.ok(!el(prefix+'-discovery-status').textContent.includes('仅允许公共 HTTPS'));
   assert.equal(el(prefix+'-models').value,'manual\nsource=alias\npaid/model'); fail=false;
  }
+ // Editing an existing channel reuses the server-stored credential: no Key needed.
+ el('provider-name').value='existing'; el('provider-name').readOnly=true; el('provider-key').value='';
+el('provider-model-search').value='';
+ const beforeReuse = calls.length;
+ await el('provider-discover').onclick();
+ assert.equal(calls.length, beforeReuse+1, 'stored-credential discovery must run without a typed Key');
+ const [reuseUrl, reuseBody] = calls.at(-1);
+ assert.equal(reuseUrl, '/_audit/api/manage');
+ assert.equal(reuseBody.action, 'provider_discover');
+ assert.equal(reuseBody.provider, 'existing');
+ assert.equal(reuseBody.api, undefined, 'the browser must never send a stored credential');
+ assert.equal(el('provider-model-options').children.length, 3);
+ assert.ok(el('provider-discovery-status').textContent.startsWith('已用保存的 Key'), el('provider-discovery-status').textContent);
+ // A typed Key still overrides the stored one for adapters the stored-key path refuses.
+ el('provider-key').value='typed-override';
+ await el('provider-discover').onclick();
+ assert.equal(calls.at(-1)[0], '/_audit/api/models/discover');
+ assert.equal(calls.at(-1)[1].api, 'typed-override');
+ el('provider-name').readOnly=false; el('provider-key').value='';
+ const beforeNew = calls.length;
+ await el('provider-discover').onclick();
+ assert.equal(calls.length, beforeNew, 'a new channel still requires a Key');
+ assert.equal(el('provider-discovery-status').textContent, '请输入此目标上游的 Key 以获取模型列表；也可继续手动输入。');
  el('logout').onclick(); assert.equal(el('provider-key').value,'');
- console.log('Discovery first setup/update, explicit key, search, selection, manual preservation, failure and logout pass');
+ console.log('Discovery first setup/update, explicit key, search, selection, manual preservation, stored-key reuse, failure and logout pass');
 })().catch(e=>{console.error(e);process.exitCode=1});

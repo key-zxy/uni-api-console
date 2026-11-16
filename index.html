@@ -238,7 +238,7 @@
   <form id="provider-form" autocomplete="off" class="stack">
     <label class="field"><span>渠道名称</span><input id="provider-name" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="my-provider"></label>
     <label class="field"><span>完整 API 地址</span><input id="provider-url" type="url" required placeholder="https://api.example.com/v1/chat/completions"></label>
-    <label class="field"><span>Provider Key（更新时留空保留）</span><input id="provider-key" type="password" autocomplete="off" maxlength="16384"></label>
+    <label class="field"><span>Provider Key（新增必填；更新与获取模型列表时留空沿用已保存 Key）</span><input id="provider-key" type="password" autocomplete="off" maxlength="16384"></label>
     <fieldset class="fieldset">
       <legend>按需发现模型</legend>
       <label class="field"><span>自定义模型目录地址（可选）</span><input id="provider-models-url" type="url" placeholder="留空从 API 地址推导 /v1/models"></label>
