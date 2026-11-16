@@ -130,4 +130,4 @@ Windows PowerShell 可使用 `.venv\\Scripts\\Activate.ps1`。部分集成测试
 
 ## 许可
 
-本仓库目前未附加开源许可证。除 GitHub 默认展示外，未经仓库所有者另行授权，不应假设可以复制、分发或用于商业用途。
+本项目以 MIT License 发布。再分发软件或其较大部分时，请保留 `LICENSE` 中的版权与许可声明。
