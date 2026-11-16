@@ -1,0 +1,32 @@
+const fs=require('node:fs'),assert=require('node:assert/strict');
+const html=fs.readFileSync('index.html','utf8'),js=fs.readFileSync('app.js','utf8');
+for(const id of ['provider-dialog','audit-dialog','provider-list','pool-list','pool-choices','new-provider']) assert.ok(html.includes(`id="${id}"`),id);
+assert.match(js,/showModal\(\)/);
+assert.match(js,/provider_refresh/);
+assert.match(js,/action:'confirm'/);
+assert.ok(html.indexOf('id="client-form"')<html.indexOf('id="pool-form"'));
+console.log('PRD 1.7 UI contracts pass');
+const vm=require('node:vm');
+const elements=new Map();
+function node(){return {dataset:{},value:'',textContent:'',title:'',innerHTML:'',disabled:false,hidden:false,checked:false,open:false,required:false,readOnly:false,style:{},attrs:{},classList:{add(){},remove(){},contains(){return false}},setAttribute(name,value){this.attrs[name]=String(value)},getAttribute(name){return Object.prototype.hasOwnProperty.call(this.attrs,name)?this.attrs[name]:null},select(){},remove(){},closest(){return this},children:[],append(...items){this.children.push(...items)},replaceChildren(){this.children=[]},querySelectorAll(selector){if(!selector.startsWith('input'))return [];const all=[];function visit(n){for(const c of n.children||[]){if(c.type==='checkbox' && (selector!=='input:checked'||c.checked)) all.push(c);visit(c)}}visit(this);return all},reset(){},showModal(){this.open=true},close(){this.open=false;if(this.onclose)this.onclose()}}}
+const el=id=>{if(!elements.has(id))elements.set(id,node());return elements.get(id)};
+let requests=[],confirmed=true,confirmationText="";
+const data={providers:[{provider:'one',base_url:'https://one.example/v1',models:[{'source':'alias'},'keep']},{provider:'two',base_url:'http://two.internal/v1',models:['second']}],pools:{work:['one/alias','two/second']},clients:[{name:'laptop',pool:'work'}]};
+const context={document:{getElementById:el,querySelectorAll:()=>[],createElement:node,createTextNode:text=>({textContent:text}),body:{classList:{add(){},remove(){}}}},localStorage:{getItem(){},removeItem(){}},clearTimeout(){},setTimeout(){},confirm:text=>{confirmationText=text;return confirmed},fetch:async(url,options)=>{const body=options.body?JSON.parse(options.body):null;requests.push(body);return {ok:true,json:async()=>body?.action==='provider_refresh'?{preview:'ticket',removed:['gone'],pools:['work'],clients:['laptop'],revoked_clients:['外部 key #2']}:data}}};
+vm.runInNewContext(js,context);
+(async()=>{
+ context.data=data;vm.runInNewContext('renderManagement(data)',context);
+ assert.equal(el('provider-list').children.length,2);
+ let choices=el('pool-choices').querySelectorAll('input');assert.deepEqual(choices.map(c=>c.value),['one/alias','one/keep','two/second']);
+ choices[0].checked=true;choices[2].checked=true;
+ vm.runInNewContext('renderManagement(data)',context);
+ assert.deepEqual(el('pool-choices').querySelectorAll('input:checked').map(c=>c.value),['one/alias','two/second']);
+ await el('pool-form').onsubmit({preventDefault(){}});
+ assert.deepEqual(requests[0],{action:'pool',name:'',models:['one/alias','two/second']});
+ vm.runInNewContext('openProvider(data.providers[0])',context);
+ assert.equal(el('provider-dialog').open,true);assert.equal(el('provider-key').value,'');assert.equal(el('provider-name').readOnly,true);assert.equal(el('provider-models').value,'source=alias\nkeep');
+ el('provider-key').value='temporary';el('provider-dialog').close();assert.equal(el('provider-key').value,'');
+ confirmed=false;requests=[];await vm.runInNewContext("providerChange('one','provider_refresh')",context);assert.equal(requests.length,1);assert.ok(confirmationText.includes('将撤销的 key'));assert.ok(confirmationText.includes('外部 key #2'));
+ confirmed=true;requests=[];await vm.runInNewContext("providerChange('one','provider_refresh')",context);assert.deepEqual(requests.slice(0,2),[{action:'provider_refresh',provider:'one'},{action:'confirm',preview:'ticket'}]);
+ console.log('Provider dialog, multi-provider choices, poll selection preservation, cancel and confirm behavior pass');
+})().catch(error=>{console.error(error);process.exitCode=1});

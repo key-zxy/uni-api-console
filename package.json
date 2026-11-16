@@ -1,0 +1,15 @@
+{
+  "name": "uni-api-console",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted web management and request audit console for uni-api",
+  "scripts": {
+    "test:ui": "node tests/test_console_ui.cjs && node tests/test_discovery_ui.cjs && node tests/test_setup_ui.cjs && node tests/test_ui_rewrite.cjs"
+  },
+  "devDependencies": {
+    "jsdom": "^26.1.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

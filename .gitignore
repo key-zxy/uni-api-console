@@ -1,0 +1,12 @@
+__pycache__/
+.venv/
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+.env
+*.management
+*.management-journal
+*.management-wal
+*.management-shm
+node_modules/

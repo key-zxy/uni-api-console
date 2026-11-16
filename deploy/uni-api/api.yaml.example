@@ -1,0 +1,13 @@
+# Generic example only; prefer the browser bootstrap for initial setup.
+providers:
+  - provider: my-provider
+    base_url: https://api.example.com/v1
+    api: REPLACE_WITH_PROVIDER_API_KEY
+    model:
+      - upstream-model: my-provider/model
+
+api_keys:
+  - api: REPLACE_WITH_A_LONG_RANDOM_ADMIN_KEY
+    role: admin
+    model:
+      - all

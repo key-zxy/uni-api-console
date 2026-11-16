@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/favicon.ico" type="image/svg+xml">
+<title>uni-api</title>
+<link rel="stylesheet" href="/_audit/console.css">
+<script src="/_audit/app.js" defer></script>
+</head>
+<body class="signed-out">
+
+<section id="login-page" class="login-page">
+  <div class="login-panel">
+    <div class="login-brand">
+      <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48" data-brand="double-fork-tree"><path d="M24 42V26M24 26 12 14M24 26l12-12M12 14V6M12 14 5 7M12 14l7-7M36 14V6M36 14l-7-7M36 14l7-7"/></svg></span>
+      <div><strong>uni-api</strong><small>自托管中转与审计控制台</small></div>
+    </div>
+    <h1>登录工作空间</h1>
+    <p class="muted">只需管理密码。登录状态仅保存在当前浏览器。</p>
+    <form id="login" class="stack">
+      <label class="field"><span>管理密码</span>
+        <input id="token" type="password" autocomplete="current-password" required placeholder="输入管理密码">
+      </label>
+      <button class="btn primary block" type="submit">进入控制台</button>
+      <p class="hint">密码由服务端环境变量配置，不会发送到任何第三方。</p>
+    </form>
+  </div>
+  <p class="login-foot">SQLite 本地审计 · uni-api 原生转发</p>
+</section>
+
+<aside class="sidebar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 48 48" data-brand="double-fork-tree"><path d="M24 42V26M24 26 12 14M24 26l12-12M12 14V6M12 14 5 7M12 14l7-7M36 14V6M36 14l-7-7M36 14l7-7"/></svg></span>
+    <div><strong>uni-api</strong><small>CONSOLE</small></div>
+  </div>
+  <nav aria-label="主导航">
+    <button data-page="dashboard" type="button" aria-current="page"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span>仪表盘</button>
+    <button data-page="keys" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="5"/><path d="m12 13 8 8m-4-4 3-3m-7-1 3-3"/></svg></span>API 密钥</button>
+    <button data-page="records" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>使用记录</button>
+    <button data-page="upstream" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h16l-4-4m6 14H5l4 4M19 7l-4 4M5 17l4-4"/></svg></span>上游接入</button>
+  </nav>
+  <div class="sidebar-foot"><span class="dot"></span>本地审计 · 原生转发</div>
+</aside>
+
+<main>
+  <header class="topbar">
+    <div>
+      <span class="eyebrow">工作空间</span>
+      <h1 id="page-title">仪表盘</h1>
+    </div>
+    <div class="topbar-actions">
+      <button id="logout" class="btn ghost" type="button">退出登录</button>
+    </div>
+  </header>
+
+  <p id="message" class="toast" role="status" aria-live="polite"></p>
+
+  <section id="console" hidden>
+
+    <div data-view="dashboard" class="view">
+      <section class="card status-card">
+        <div class="card-head"><h2>运行状态</h2><span class="badge neutral">实时</span></div>
+        <p id="runtime-status" class="status-line">正在检查服务状态…</p>
+        <p class="hint">运行状态仅表示原生管理接口可用，不代表所有上游可调用。</p>
+      </section>
+
+      <div class="stats">
+        <div class="stat"><span>已接入渠道</span><strong id="stat-providers">—</strong></div>
+        <div class="stat"><span>模型授权池</span><strong id="stat-pools">—</strong></div>
+        <div class="stat"><span>客户端密钥</span><strong id="stat-clients">—</strong></div>
+      </div>
+
+      <section class="card" id="usage">
+        <div class="card-head"><div><h2>用量统计</h2><p class="hint">请求数来自审计记录；词元仅汇总上游已返回的 usage。每日趋势按 UTC 聚合。</p></div>
+          <form id="usage-range" class="range-picker">
+            <select id="usage-days">
+              <option value="1">近 24 小时</option>
+              <option value="7" selected>近 7 天</option>
+              <option value="30">近 30 天</option>
+            </select>
+          </form>
+        </div>
+        <div class="usage-totals" id="usage-totals"></div>
+        <div class="chart-wrap">
+          <svg id="usage-chart" viewBox="0 0 720 220" role="img" aria-label="每日用量图表"></svg>
+        </div>
+        <div class="card-head" style="margin-top:20px"><div><h2>模型用量明细</h2><p class="hint">按请求数排列，展示前 20 项。渠道标签按当前配置匹配，并非实际路由证据。</p></div></div><div class="table-wrap" id="usage-table-wrap"><table class="usage-table" id="usage-table"></table></div>
+      </section>
+
+      <section class="card" id="maintenance">
+        <div class="card-head"><h2>保留与维护</h2></div>
+        <form id="retention" class="filters">
+          <label class="field"><span>审计保留天数（1–3650）</span><input id="days" type="number" min="1" max="3650" required></label>
+          <button class="btn primary">保存并清理</button>
+          <button type="button" id="cleanup" class="btn ghost">立即清理过期记录</button>
+        </form>
+        <details class="disclosure">
+          <summary>原生配置结构诊断（脱敏只读）</summary>
+          <button id="config" class="btn ghost" type="button">读取结构</button>
+          <pre id="snapshot" class="code-block"></pre>
+        </details>
+      </section>
+    </div>
+
+    <div data-view="upstream" class="view">
+      <section id="management" class="card">
+        <div class="card-head">
+          <div><h2>上游渠道</h2><p class="hint">管理已配置渠道与模型。展开渠道模型列表查看详情。</p></div>
+          <div class="head-actions">
+            <button id="new-provider" class="btn primary" type="button">新增渠道</button>
+            <button id="management-refresh" class="btn ghost" type="button">刷新配置</button>
+          </div>
+        </div>
+
+        <p id="setup-status" class="status-line"></p>
+        <div id="provider-list" class="provider-list"></div>
+
+        <section id="setup-result" class="callout" hidden>
+          <strong>请立即保存客户端 key</strong>
+          <p>仅本次显示，退出或刷新后不再出现。</p>
+          <pre id="setup-client-key" class="code-block"></pre>
+        </section>
+
+        <div class="danger-zone">
+          <div><strong>回滚</strong><p class="hint">恢复上一次管理变更的 Provider、key 与授权，可能恢复已撤销凭据。</p></div>
+          <button id="rollback" class="btn danger" type="button">回滚上一次管理变更</button>
+        </div>
+
+        <p id="management-summary" class="summary"></p>
+
+        <details class="disclosure">
+          <summary>配置诊断与版本说明</summary>
+          <p id="management-warning" class="hint"></p>
+          <p class="hint">仅限本地单写入者：不要并发修改原生配置。展开后的环境密钥可能以明文保存到原生配置和版本库，环境引用不会保留。不做 DNS 重绑定防护，也不约束原生重定向或代理目标。</p>
+          <p class="hint">配置版本最多保留 10 份，含凭据，存于独立 0600 管理数据库。回滚会恢复旧 key 与授权，请确认影响。</p>
+          <pre id="management-output" class="code-block"></pre>
+        </details>
+      </section>
+    </div>
+
+    <div data-view="keys" class="view">
+      <section class="card endpoint-card">
+        <div class="card-head"><h2>接口地址</h2></div>
+        <span class="endpoint-label">OpenAI 兼容 · BASE URL</span>
+        <div class="endpoint-copy">
+          <input id="api-base-url" aria-label="API 接口地址" readonly>
+          <button type="button" id="copy-api-url" class="btn ghost">复制地址</button>
+        </div>
+        <span id="copy-api-status" role="status" class="hint"></span>
+        <p class="hint">客户端使用此地址并填入下方签发的 API 密钥。跨设备访问时请改用该设备可达的主机地址。</p>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><div><h2>API 密钥</h2><p class="hint">为每个客户端绑定独立授权池。更换池无需替换密钥。</p></div><button id="new-client" class="btn primary" type="button">创建密钥</button></div>
+        <div id="key-list" class="provider-list"></div>
+        <dialog id="client-dialog" aria-labelledby="client-dialog-title">
+        <div class="dialog-head"><h2 id="client-dialog-title">创建密钥</h2><button type="button" data-close="client-dialog" class="btn ghost icon" aria-label="关闭">✕</button></div>
+        <form id="client-form" class="stack">
+          <label class="field"><span>客户端名称</span><input id="client-name" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="laptop"></label>
+          <label class="field"><span>绑定授权池</span><select id="client-pool" required></select></label>
+          <p class="form-message" role="status"></p><button id="client-save" class="btn primary">签发密钥</button>
+        </form>
+        </dialog>
+        <div id="new-key-result" class="callout" hidden><strong>请立即保存新密钥</strong><p class="hint">仅本次显示，关闭或刷新后无法再次获取。</p><pre id="client-key" class="code-block"></pre><button id="copy-client-key" type="button" class="btn ghost">复制新密钥</button><button id="dismiss-client-key" type="button" class="btn ghost">我已保存</button></div>
+        <button id="client-revoke" type="button" class="btn danger-soft" hidden>撤销此名称的密钥</button>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><div><h2>模型授权池</h2><p class="hint">集中管理模型授权列表。编辑会同步此池绑定的所有密钥。</p></div><button id="new-pool" type="button" class="btn primary">创建模型池</button></div>
+        <div id="pool-list" class="provider-list"></div>
+        <dialog id="pool-dialog" aria-labelledby="pool-dialog-title"><div class="dialog-head"><h2 id="pool-dialog-title">创建模型池</h2><button type="button" data-close="pool-dialog" class="btn ghost icon" aria-label="关闭">✕</button></div>
+        <form id="pool-form" class="stack">
+          <label class="field"><span>池名称</span><input id="pool-name" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="work"></label>
+          <fieldset class="fieldset">
+            <legend>从已配置渠道选择模型</legend>
+            <input id="pool-search" type="search" placeholder="搜索渠道或模型" aria-label="搜索池内可选模型"><div id="pool-choices" class="model-options"></div>
+          </fieldset>
+          <textarea id="pool-models" hidden></textarea>
+          <p class="form-message" role="status"></p><p id="pool-impact" class="hint"></p><button class="btn primary">保存池并同步授权</button>
+        </form>
+        </dialog>
+      </section>
+    </div>
+
+    <div data-view="records" class="view">
+      <section class="card" id="requests">
+        <div class="card-head"><div><h2>通用日志</h2><p class="hint">逐次查看令牌、模型与用量；缺失明细不按零消耗处理。上下文仅供管理员查看。</p></div></div>
+        <form id="filters" class="filters">
+          <label class="field"><span>路径</span><input name="search" placeholder="/v1/chat/completions"></label>
+          <label class="field"><span>方法</span><input name="method" placeholder="POST"></label>
+          <label class="field"><span>状态</span><input name="status" placeholder="200"></label>
+          <label class="field"><span>模型</span><input name="model" placeholder="model-id"></label>
+          <button class="btn primary">查询</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>时间</th><th>令牌 / 模型池</th><th>上游 / 模型</th><th>输入 / 输出 / 缓存</th><th>缓存占比</th><th>吐字速度</th><th>首字 / 耗时</th><th>状态</th><th>详情</th></tr></thead>
+            <tbody id="rows"></tbody>
+          </table>
+        </div>
+        <div class="actions"><span id="record-page" class="hint" role="status"></span>
+          <button id="previous" class="btn ghost" type="button">上一页</button>
+          <button id="next" class="btn ghost" type="button">下一页</button>
+        </div>
+      </section>
+    </div>
+
+    <footer class="page-foot">uni-api 控制台 · SQLite 本地审计 · 不向外部发送审计记录</footer>
+  </section>
+</main>
+
+<dialog id="provider-dialog" aria-label="渠道设置">
+  <div class="dialog-head">
+    <div><span class="eyebrow">上游渠道</span><h2 class="dialog-title">渠道设置</h2></div>
+    <button type="button" data-close="provider-dialog" class="btn ghost icon" aria-label="关闭">✕</button>
+  </div>
+  <p class="hint">留空 Key 保留原凭据；修改目标地址时请输入新 Key。</p>
+  <form id="setup-form" hidden autocomplete="off" class="stack">
+    <label class="field"><span>Provider 名称</span><input id="setup-provider" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="my-provider"></label>
+    <label class="field"><span>完整 API 地址</span><input id="setup-url" type="url" required placeholder="https://api.example.com/v1/chat/completions"></label>
+    <label class="field"><span>Provider Key</span><input id="setup-key" type="password" required maxlength="16384" autocomplete="off"></label>
+    <fieldset class="fieldset">
+      <legend>按需发现模型</legend>
+      <label class="field"><span>自定义模型目录地址（可选）</span><input id="setup-models-url" type="url" placeholder="留空从 API 地址推导 /v1/models"></label>
+      <p class="hint">点击后才发送 Key，且只发送到该地址的主机。首次保存、更新及发现均支持 HTTP/HTTPS、端口 1–65535、公网、内网、localhost 及 fake-IP DNS；不做主机白名单或公共 DNS 检查。目录不代表免费或账户可调用，不自动选择。</p>
+      <button type="button" id="setup-discover" class="btn ghost">获取模型列表</button>
+      <p id="setup-discovery-status" role="status" class="hint"></p>
+      <label class="field"><span>搜索目录</span><input id="setup-model-search" type="search"></label>
+      <div id="setup-model-options" class="model-options"></div>
+      <button type="button" id="setup-model-add" class="btn ghost">将勾选模型加入输入框</button>
+    </fieldset>
+    <label class="field"><span>模型（每行一个，或 上游模型=公开别名）</span><textarea id="setup-models" required></textarea></label>
+    <button id="setup-submit" class="btn primary block">保存并启动</button>
+  </form>
+  <form id="provider-form" autocomplete="off" class="stack">
+    <label class="field"><span>渠道名称</span><input id="provider-name" required pattern="[A-Za-z0-9_-]{1,64}" placeholder="my-provider"></label>
+    <label class="field"><span>完整 API 地址</span><input id="provider-url" type="url" required placeholder="https://api.example.com/v1/chat/completions"></label>
+    <label class="field"><span>Provider Key（更新时留空保留）</span><input id="provider-key" type="password" autocomplete="off" maxlength="16384"></label>
+    <fieldset class="fieldset">
+      <legend>按需发现模型</legend>
+      <label class="field"><span>自定义模型目录地址（可选）</span><input id="provider-models-url" type="url" placeholder="留空从 API 地址推导 /v1/models"></label>
+      <p class="hint">点击后才发送 Key，且只发送到该地址的主机。首次保存、更新及发现均支持 HTTP/HTTPS、端口 1–65535、公网、内网、localhost 及 fake-IP DNS；不做主机白名单或公共 DNS 检查。目录不代表免费或账户可调用，不自动选择。</p>
+      <button type="button" id="provider-discover" class="btn ghost">获取模型列表</button>
+      <p id="provider-discovery-status" role="status" class="hint"></p>
+      <label class="field"><span>搜索目录</span><input id="provider-model-search" type="search"></label>
+      <div id="provider-model-options" class="model-options"></div>
+      <button type="button" id="provider-model-add" class="btn ghost">将勾选模型加入输入框</button>
+    </fieldset>
+    <label class="field"><span>模型（每行一个，或 上游模型=公开别名）</span><textarea id="provider-models" required placeholder="vendor/model"></textarea></label>
+    <button class="btn primary block">保存到 uni-api</button>
+  </form>
+</dialog>
+
+<dialog id="audit-dialog" aria-label="请求与响应详情">
+  <div class="dialog-head">
+    <div><span class="eyebrow">使用记录</span><h2 class="dialog-title">请求与响应上下文</h2></div>
+    <button type="button" data-close="audit-dialog" class="btn ghost icon" aria-label="关闭">✕</button>
+  </div>
+  <p class="hint">文本按 UTF-8 展示；base64 字段保留捕获的原始字节。请检查截断与 complete 标记。</p>
+  <button id="delete" disabled class="btn danger">删除选中记录</button>
+  <pre id="detail" class="code-block"></pre>
+</dialog>
+
+</body>
+</html>

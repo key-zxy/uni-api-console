@@ -1,0 +1,82 @@
+name: uni-api
+
+services:
+  audit-console:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: local/uni-api-audit-console:0.1
+    restart: unless-stopped
+    environment:
+      AUDIT_UPSTREAM: http://uni-api:8000
+      AUDIT_ADMIN_TOKEN: ${AUDIT_ADMIN_TOKEN:?set in deploy/.env}
+      AUDIT_MANAGEMENT_KEY: ${AUDIT_MANAGEMENT_KEY:-}
+      AUDIT_CONFIG_PATH: /config/api.yaml
+      AUDIT_DB: /data/audit.sqlite3
+      AUDIT_HOST: 0.0.0.0
+      AUDIT_PORT: "8787"
+      AUDIT_ALLOW_NONLOOPBACK_BIND: "1"
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-7}
+      AUDIT_SCHEMA_PATH: /v1/channel-settings/schema
+      AUDIT_SNAPSHOT_PATH: /v1/channel-settings/management-snapshot
+    ports:
+      - "${AUDIT_BIND_ADDRESS:-127.0.0.1}:${AUDIT_PORT_PUBLISHED:-8787}:8787"
+    volumes:
+      - ./audit-data:/data
+      - ./uni-api/config:/config
+    networks:
+      - control
+    user: "1000:1000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=2).read()
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  uni-api:
+    user: "1000:1000"
+    image: ${UNI_API_IMAGE:-yym68686/uni-api:0.1.152}
+    # Preserve the verified image entrypoint and its arguments; no command override.
+    entrypoint: ["/bin/sh", "/usr/local/bin/wait-for-config.sh", "/usr/local/bin/uni-api-front"]
+    environment:
+      UNI_API_CONFIG_PATH: /config/api.yaml
+    restart: unless-stopped
+    volumes:
+      - ./uni-api/config:/config:rw
+      - ./wait-for-config.sh:/usr/local/bin/wait-for-config.sh:ro
+      - ./uni-api/data:/home/data
+    expose:
+      - "8000"
+    networks:
+      - control
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+networks:
+  control:
+    driver: bridge
