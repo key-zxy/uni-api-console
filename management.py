@@ -183,6 +183,26 @@ def install(app, settings, state):
             generated=None; pool_change=None; replacement_pools=None
             try:
                 action=body['action']
+                if action=='provider_discover':
+                    # Read-only catalog fetch for an existing provider using the
+                    # server-side stored credential. The credential itself is
+                    # never returned to the browser; only the catalog is.
+                    if set(body) not in ({'action','provider'},{'action','provider','models_url'}): raise ValueError()
+                    provider=name(body['provider'])
+                    matches=[p for p in providers if p.get('provider')==provider]
+                    if len(matches)!=1: raise ValueError()
+                    old=matches[0]
+                    credential=old.get('api')
+                    if not isinstance(credential,str) or not credential or not isinstance(old.get('engine',''),str) or old.get('engine','').lower() not in ('','openai'):
+                        return web.json_response({'error':'此渠道的协议或多凭据无法用于目录获取；请手动输入 Key。'},status=409)
+                    url=models_url(old.get('base_url',''), body.get('models_url',''))
+                    try:
+                        catalog=await fetch_models(url,credential)
+                    except Exception:
+                        return web.json_response({'error':'未取得完整有效的 OpenAI 模型目录；可手动输入或粘贴模型。'},status=409)
+                    if any(credential in model for model in catalog):
+                        return web.json_response({'error':'模型目录内容异常；请手动输入或粘贴模型。'},status=409)
+                    return web.json_response({'provider':provider,'models':catalog})
                 if action in ('provider_delete','provider_refresh'):
                     if set(body)!={'action','provider'}: raise ValueError()
                     provider=name(body['provider'])
@@ -257,16 +277,49 @@ def install(app, settings, state):
                     if set(body)!={'action','provider','base_url','api','models'}: raise ValueError()
                     provider=name(body['provider']); models=body['models']; credential=body['api']
                     if not isinstance(models,list) or not 1<=len(models)<=100: raise ValueError()
+                    old=next((p for p in providers if p.get('provider')==provider),None)
+                    if not isinstance(credential,str) or len(credential)>16384 or any(ord(c)<32 for c in credential) or (not old and not credential.strip()): raise ValueError()
+                    if not isinstance(body['base_url'],str): raise ValueError()
+                    url=await public_url(body['base_url'])
+                    if old is not None:
+                        # The editor may send a bare upstream name for a model that
+                        # already carries a public alias. Keep that mapping instead of
+                        # silently renaming the model to the upstream name, which would
+                        # break every pool rule still referencing the old alias. A bare
+                        # name whose model basename matches exactly one existing alias is
+                        # treated as a corrected upstream spelling of that same model.
+                        old_entries=old.get('model',[])
+                        source_alias={}
+                        alias_names=[]
+                        for m in old_entries:
+                            if isinstance(m,dict) and len(m)==1:
+                                src, alias = next(iter(m.items()))
+                                if isinstance(src,str) and isinstance(alias,str):
+                                    source_alias[src]=alias
+                                    alias_names.append(alias)
+                            elif isinstance(m,str):
+                                alias_names.append(m)
+                        alias_by_base={}
+                        for alias in alias_names:
+                            alias_by_base.setdefault(alias.rsplit('/',1)[-1],[]).append(alias)
+                        resolved=[]
+                        for m in models:
+                            if isinstance(m,str) and m not in alias_names:
+                                if m in source_alias and source_alias[m]!=m:
+                                    resolved.append({m: source_alias[m]})
+                                    continue
+                                matches=alias_by_base.get(m.rsplit('/',1)[-1],[])
+                                if len(matches)==1 and matches[0]!=m:
+                                    resolved.append({m: matches[0]})
+                                    continue
+                            resolved.append(m)
+                        models=resolved
                     aliases=[]
                     for m in models:
                         values=[m] if isinstance(m,str) else list(m.keys())+list(m.values()) if isinstance(m,dict) and len(m)==1 else []
                         if not values or any(not isinstance(v,str) or not re.fullmatch(r'[A-Za-z0-9_.:/-]{1,160}',v) or v in ('all','default') for v in values): raise ValueError()
                         aliases.append(m if isinstance(m,str) else next(iter(m.values())))
                     if len(set(aliases))!=len(aliases): raise ValueError()
-                    old=next((p for p in providers if p.get('provider')==provider),None)
-                    if not isinstance(credential,str) or len(credential)>16384 or any(ord(c)<32 for c in credential) or (not old and not credential.strip()): raise ValueError()
-                    if not isinstance(body['base_url'],str): raise ValueError()
-                    url=await public_url(body['base_url'])
                     if old is not None:
                         old_aliases=[m if isinstance(m,str) else next(iter(m.values()))
                                      for m in old.get('model',[]) if isinstance(m,str) or isinstance(m,dict) and len(m)==1]
@@ -274,7 +327,12 @@ def install(app, settings, state):
                                 'admin' not in k.get('role','').lower() and not re.fullmatch(
                                     r'console:[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{1,64}',k.get('role','')) for k in keys):
                             return web.json_response({'error':'External client authorization requires reconciliation; use refresh/delete preview and confirmation before removing models'},status=409)
-                    if any(item.startswith(provider+'/') and item[len(provider)+1:] not in aliases for members in pools.values() for item in members): raise ValueError()
+                    conflicts=sorted({(pool,item) for pool,members in pools.items() for item in members
+                                      if item.startswith(provider+'/') and item[len(provider)+1:] not in aliases})
+                    if conflicts:
+                        detail='；'.join(f'{item}（池 {pool}）' for pool,item in conflicts[:6])
+                        more='等' if len(conflicts)>6 else ''
+                        return web.json_response({'error':f'无法保存：这些模型仍被模型池使用——{detail}{more}。请先在对应模型池中取消勾选，或保留这些模型（只写上游名会保留原公开别名；改名请写 上游模型=新别名）。'},status=409)
                     entry=copy.deepcopy(old) if old else {'provider':provider}
                     entry.update(base_url=url, model=models)
                     if credential: entry['api']=credential

@@ -99,7 +99,30 @@ class ManagementTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.post({'action':'provider','provider':'initial','base_url':'https://example.org/v1/chat/completions','api':'','models':[{'upstream-paid':'public-paid'}]})).status,200)
         self.assertEqual(self.config['providers'][0]['api'],'provider-secret')
         self.assertEqual((await self.post({'action':'pool','name':'paid','models':['initial/public-paid']})).status,200)
-        self.assertEqual((await self.post({'action':'provider','provider':'initial','base_url':'https://example.org/v1/chat/completions','api':'','models':['other']})).status,400)
+        self.assertEqual((await self.post({'action':'provider','provider':'initial','base_url':'https://example.org/v1/chat/completions','api':'','models':['other']})).status,409)
+
+    async def test_bare_upstream_name_keeps_existing_alias_for_pool(self):
+        self.config['providers'][0]['model']=[{'up/x':'initial/x'}]
+        self.assertEqual((await self.post({'action':'pool','name':'free','models':['initial/initial/x']})).status,200)
+        self.assertEqual((await self.post({'action':'provider','provider':'initial','base_url':'https://example.org/v1/chat/completions','api':'','models':['up/x']})).status,200)
+        self.assertEqual(self.config['providers'][0]['model'],[{'up/x':'initial/x'}])
+
+    async def test_source_rename_with_same_basename_keeps_public_alias(self):
+        # A typo'd channel id (free/model-a) corrected to vendor/model-a: same model
+        # basename, so the pooled public alias must survive the save.
+        self.config['providers'][0]['model']=[{'free/model-a':'initial/model-a:free'}]
+        self.assertEqual((await self.post({'action':'pool','name':'free','models':['initial/initial/model-a:free']})).status,200)
+        self.assertEqual((await self.post({'action':'provider','provider':'initial','base_url':'https://example.org/v1/chat/completions','api':'','models':['nvidia/model-a:free']})).status,200)
+        self.assertEqual(self.config['providers'][0]['model'],[{'nvidia/model-a:free':'initial/model-a:free'}])
+
+    async def test_pool_conflict_reports_actionable_message(self):
+        self.config['providers'][0]['model']=[{'up/x':'initial/x'},{'up/y':'initial/y'}]
+        self.assertEqual((await self.post({'action':'pool','name':'free','models':['initial/initial/x']})).status,200)
+        result=await self.post({'action':'provider','provider':'initial','base_url':'https://example.org/v1/chat/completions','api':'','models':['up/y']})
+        self.assertEqual(result.status,409)
+        message=(await result.json())['error']
+        self.assertIn('仍被模型池使用',message)
+        self.assertIn('initial/initial/x',message)
 
     async def test_client_names_cannot_gain_native_admin_role(self):
         await self.post({'action':'pool','name':'work','models':['initial/m']})
