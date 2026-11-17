@@ -604,6 +604,8 @@ def create_app(settings):
         return web.json_response({'status':'ok'})
     import management
     management.install(app, s, state)
+    import usage as provider_usage
+    provider_usage.install(app, s, state)
     async def favicon(r):
         svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" data-brand="double-fork-tree"><rect width="64" height="64" rx="16" fill="#14251f"/><path d="M32 54V35M32 35 18 21M32 35l14-14M18 21V10M18 21 9 12M18 21l9-9M46 21V10M46 21l-9-9M46 21l9-9" fill="none" stroke="#63d5b4" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>'
         return web.Response(text=svg, content_type='image/svg+xml', headers={'Cache-Control':'public, max-age=86400'})

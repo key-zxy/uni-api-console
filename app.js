@@ -12,7 +12,7 @@ let managementData = null;
 let currentPage = 'dashboard';
 let cachedAuditRows = [], cachedUsageModels = [];
 
-const pageNames = {dashboard: '仪表盘', keys: 'API 密钥', records: '使用记录', upstream: '上游接入'};
+const pageNames = {dashboard: '仪表盘', keys: 'API 密钥', records: '使用记录', upstream: '上游接入', usage: '余量'};
 
 const endpointInput = $('api-base-url');
 if (endpointInput && typeof location !== 'undefined') endpointInput.value = location.origin + '/v1';
@@ -521,11 +521,196 @@ const parseModels = id => lines(id).map(line => {
   return pair.length === 2 ? {[pair[0].trim()]: pair[1].trim()} : line;
 });
 
+/* 上游余量：每个渠道一个进度条，余量方式可自定义。 */
+const MODE_LABELS = {none: '不查询', openrouter: 'OpenRouter', openai_billing: 'OpenAI 计费', amd: 'AMD 日预算', custom: '自定义'};
+const UNIT_LABELS = {usd: '美元', cny: '元', credits: '点', count: '次', percent: '%'};
+let balancesData = null;
+let balanceLoaded = false;
+
+function fmtAmount(value, unit) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '—';
+  if (number >= 1e6) return '∞';
+  const text = Math.abs(number) >= 100 ? number.toFixed(0) : number.toFixed(2);
+  if (unit === 'percent') return text + '%';
+  if (unit === 'usd') return '$' + text;
+  if (unit === 'cny') return '¥' + text;
+  return text + (UNIT_LABELS[unit] ? ' ' + UNIT_LABELS[unit] : '');
+}
+
+function balanceCard(item) {
+  const reading = item.reading;
+  const mode = item.mode || 'none';
+  const card = document.createElement('div');
+  card.className = 'provider-card balance-card';
+  card.dataset.provider = item.provider;
+  const head = document.createElement('div');
+  head.className = 'balance-head';
+  const name = document.createElement('div');
+  name.className = 'balance-name';
+  const title = document.createElement('strong');
+  title.textContent = item.provider;
+  const url = document.createElement('span');
+  url.className = 'balance-url';
+  url.textContent = item.base_url || '';
+  name.append(title, url);
+  const badge = document.createElement('span');
+  badge.className = 'badge';
+  badge.dataset.mode = mode;
+  badge.textContent = MODE_LABELS[mode] || mode;
+  head.append(name, badge);
+  card.append(head);
+
+  if (mode !== 'none' && reading) {
+    const percent = reading.ok ? reading.percent : null;
+    const bar = document.createElement('div');
+    bar.className = 'balance-bar' + (reading.ok ? '' : ' danger') + (percent !== null && percent !== undefined && percent <= 20 ? ' warn' : '');
+    const fill = document.createElement('span');
+    fill.style.width = (percent !== null && percent !== undefined ? Math.max(2, Math.min(100, percent)) : 100) + '%';
+    if (percent !== null && percent !== undefined) fill.dataset.percent = String(Math.round(percent * 10) / 10);
+    bar.append(fill);
+    card.append(bar);
+    const meta = document.createElement('div');
+    meta.className = 'balance-meta';
+    if (!reading.ok) {
+      meta.dataset.error = '1';
+      meta.textContent = reading.error || '查询失败';
+      card.classList.add('error');
+    } else {
+      meta.append(Object.assign(document.createElement('span'), {textContent: (reading.label || MODE_LABELS[mode]) + '：' + fmtAmount(reading.remaining, reading.unit)}));
+      if (reading.total !== null && reading.total !== undefined) meta.append(Object.assign(document.createElement('span'), {textContent: '总量 ' + fmtAmount(reading.total, reading.unit)}));
+      if (reading.used !== null && reading.used !== undefined) meta.append(Object.assign(document.createElement('span'), {textContent: '已用 ' + fmtAmount(reading.used, reading.unit)}));
+      if (percent !== null && percent !== undefined) meta.append(Object.assign(document.createElement('span'), {textContent: '剩余 ' + (Math.round(percent * 10) / 10) + '%'}));
+    }
+    card.append(meta);
+    const detail = Object.entries(reading.detail || {});
+    if (reading.ok && detail.length) {
+      const box = document.createElement('div');
+      box.className = 'balance-detail';
+      detail.forEach(([key, value]) => box.append(Object.assign(document.createElement('span'), {textContent: key + ' ' + value})));
+      card.append(box);
+    }
+    if (typeof item.age === 'number' && item.age >= 0) {
+      const age = document.createElement('p');
+      age.className = 'hint';
+      age.textContent = item.age < 90 ? '刚刚更新' : Math.max(1, Math.round(item.age / 60)) + ' 分钟前更新';
+      card.append(age);
+    }
+  } else if (mode === 'none') {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = '未配置余量方式，点「设置」选择查询接口。';
+    card.append(hint);
+  } else {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = '还没有余量数据，点「刷新」或「设置」开始。';
+    card.append(hint);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'balance-actions';
+  const refresh = document.createElement('button');
+  refresh.type = 'button';
+  refresh.className = 'btn ghost';
+  refresh.textContent = '刷新';
+  refresh.onclick = action(() => refreshBalances({provider: item.provider}));
+  const config = document.createElement('button');
+  config.type = 'button';
+  config.className = 'btn ghost';
+  config.textContent = '设置';
+  config.onclick = () => openBalanceDialog(item);
+  actions.append(refresh, config);
+  card.append(actions);
+  return card;
+}
+
+async function loadBalances(options = {}) {
+  const status = $('balances-status');
+  if (status) status.textContent = '正在读取余量…';
+  try {
+    const data = options.force
+      ? await api('balances/refresh', {method: 'POST', body: JSON.stringify({provider: options.provider || '', force: true})})
+      : await api('balances');
+    balancesData = data.providers || [];
+    renderBalances();
+    balanceLoaded = true;
+    if (status) status.textContent = '';
+  } catch (error) {
+    if (status) status.textContent = error.message || '余量读取失败';
+  }
+}
+
+function renderBalances() {
+  const list = $('balances-list');
+  if (!list) return;
+  list.replaceChildren(...(balancesData || []).map(balanceCard));
+}
+
+async function refreshBalances(options = {}) {
+  await loadBalances({force: true, provider: options.provider || ''});
+  return balancesData;
+}
+
+function toggleBalanceCustom() {
+  const box = $('balance-custom-fields');
+  if (box) box.hidden = $('balance-mode').value !== 'custom';
+}
+
+function openBalanceDialog(item) {
+  const dialog = $('balance-dialog');
+  if (!dialog) return;
+  const custom = item.custom || {};
+  $('balance-provider').value = item.provider;
+  $('balance-mode').value = item.mode || 'none';
+  $('balance-url').value = custom.url || '';
+  $('balance-used-path').value = custom.used_path || '';
+  $('balance-total-path').value = custom.total_path || '';
+  $('balance-remaining-path').value = custom.remaining_path || '';
+  $('balance-unit').value = custom.unit || 'usd';
+  $('balance-label').value = custom.label || '';
+  toggleBalanceCustom();
+  dialog.showModal();
+}
+
+const balanceMode = $('balance-mode');
+if (balanceMode) balanceMode.onchange = toggleBalanceCustom;
+const balanceRefreshAll = $('balances-refresh-all');
+if (balanceRefreshAll) balanceRefreshAll.onclick = action(() => refreshBalances());
+const balanceForm = $('balance-form');
+if (balanceForm) balanceForm.onsubmit = action(async () => {
+  const message = balanceForm.querySelector('.form-message');
+  const payload = {
+    provider: $('balance-provider').value,
+    mode: $('balance-mode').value,
+    url: $('balance-url').value.trim(),
+    used_path: $('balance-used-path').value.trim(),
+    total_path: $('balance-total-path').value.trim(),
+    remaining_path: $('balance-remaining-path').value.trim(),
+    unit: $('balance-unit').value,
+    label: $('balance-label').value.trim()
+  };
+  if (payload.mode === 'custom' && !payload.url) {
+    if (message) message.textContent = '自定义方式需要填写 URL';
+    throw new Error('自定义方式需要填写 URL');
+  }
+  try {
+    await api('balances', {method: 'POST', body: JSON.stringify(payload)});
+    $('balance-dialog').close();
+    await refreshBalances({provider: payload.provider});
+  } catch (error) {
+    if (message) message.textContent = error.message;
+    throw error;
+  }
+});
+
 function showPage(page) {
   currentPage = pageNames[page] ? page : 'dashboard';
   document.querySelectorAll('[data-view]').forEach(el => { el.hidden = el.dataset.view !== currentPage; });
   document.querySelectorAll('[data-page]').forEach(el => { el.setAttribute('aria-current', el.dataset.page === currentPage ? 'page' : 'false'); });
   $('page-title').textContent = pageNames[currentPage];
+  if (currentPage === 'usage' && !balanceLoaded) loadBalances().catch(() => {});
 }
 document.querySelectorAll('[data-page]').forEach(el => { el.onclick = () => showPage(el.dataset.page); });
 

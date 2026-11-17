@@ -41,6 +41,7 @@
     <button data-page="keys" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="9" r="5"/><path d="m12 13 8 8m-4-4 3-3m-7-1 3-3"/></svg></span>API 密钥</button>
     <button data-page="records" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg></span>使用记录</button>
     <button data-page="upstream" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h16l-4-4m6 14H5l4 4M19 7l-4 4M5 17l4-4"/></svg></span>上游接入</button>
+    <button data-page="usage" type="button"><span aria-hidden="true"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10m5 10V4m5 16v-7m5 7V7"/></svg></span>余量</button>
   </nav>
   <div class="sidebar-foot"><span class="dot"></span>本地审计 · 原生转发</div>
 </aside>
@@ -139,6 +140,44 @@
           <pre id="management-output" class="code-block"></pre>
         </details>
       </section>
+    </div>
+
+    <div data-view="usage" class="view">
+      <section class="card">
+        <div class="card-head">
+          <div><h2>上游余量</h2><p class="hint">每个上游独立配置余量查询方式；进度条按剩余比例显示，可单独或全部刷新。</p></div>
+          <div class="head-actions">
+            <button id="balances-refresh-all" class="btn primary" type="button">全部刷新</button>
+          </div>
+        </div>
+        <p id="balances-status" class="status-line"></p>
+        <div id="balances-list" class="provider-list"></div>
+      </section>
+      <dialog id="balance-dialog" aria-labelledby="balance-dialog-title">
+        <div class="dialog-head"><h2 id="balance-dialog-title">余量设置</h2><button type="button" data-close="balance-dialog" class="btn ghost icon" aria-label="关闭">✕</button></div>
+        <form id="balance-form" class="stack">
+          <input id="balance-provider" type="hidden">
+          <label class="field"><span>余量方式</span><select id="balance-mode">
+            <option value="none">不查询</option>
+            <option value="openrouter">OpenRouter（/credits + /key）</option>
+            <option value="openai_billing">OpenAI 计费（billing/subscription + usage）</option>
+            <option value="amd">AMD Radeon（/key + /usage 日预算）</option>
+            <option value="custom">自定义（URL + JSON 路径）</option>
+          </select></label>
+          <div id="balance-custom-fields" hidden>
+            <label class="field"><span>URL（/ 开头为相对渠道根地址，或 https 同主机地址）</span><input id="balance-url" placeholder="/v1/my/quota"></label>
+            <label class="field"><span>已用路径（JSON 路径，如 data.used[0].value）</span><input id="balance-used-path" placeholder="data.used"></label>
+            <label class="field"><span>总量路径</span><input id="balance-total-path" placeholder="data.total"></label>
+            <label class="field"><span>剩余路径（可选，缺省=总量−已用）</span><input id="balance-remaining-path" placeholder="data.remaining"></label>
+            <label class="field"><span>单位</span><select id="balance-unit">
+              <option value="usd">美元</option><option value="cny">人民币</option><option value="credits">点数</option><option value="count">次数</option><option value="percent">百分比</option><option value="usd_cents">美分（显示为美元）</option>
+            </select></label>
+            <label class="field"><span>标签（如「本月额度」）</span><input id="balance-label" maxlength="60" placeholder="本月额度"></label>
+          </div>
+          <p class="form-message" role="status"></p>
+          <button id="balance-save" class="btn primary">保存设置</button>
+        </form>
+      </dialog>
     </div>
 
     <div data-view="keys" class="view">

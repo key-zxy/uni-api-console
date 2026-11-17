@@ -5,7 +5,7 @@
   "description": "Self-hosted web management and request audit console for uni-api",
   "license": "MIT",
   "scripts": {
-    "test:ui": "node tests/test_console_ui.cjs && node tests/test_discovery_ui.cjs && node tests/test_setup_ui.cjs && node tests/test_ui_rewrite.cjs"
+    "test:ui": "node tests/test_console_ui.cjs && node tests/test_discovery_ui.cjs && node tests/test_setup_ui.cjs && node tests/test_ui_rewrite.cjs && node tests/test_usage_ui.cjs"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"
