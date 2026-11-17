@@ -152,18 +152,29 @@ def should_log(path):
     return not path.rstrip('/').endswith(SKIP_LOG_SUFFIXES)
 
 
-def upstream_hint(headers):
-    """Vendor fingerprints the upstream gateway adds (not the uni-api channel name).
+HINT_KEYWORDS = ('provider', 'channel', 'upstream', 'backend', 'vendor', 'served', 'model')
+HINT_DENY = ('x-uni-api-', 'x-oneapi-request-id', 'x-request-id', 'x-magpie-archive-id', 'x-model-list',
+             'x-ratelimit', 'x-forwarded-', 'x-real-ip')
 
-    uni-api exposes no per-request channel header, but some upstreams stamp their own
-    provider/model (e.g. ``x-magpie-provider``), which is the only per-request signal
-    available for an alias served by several channels.
+
+def upstream_hint(headers):
+    """Generic vendor fingerprints stamped by whichever upstream served the request.
+
+    uni-api itself exposes no per-request channel header, so nothing is hard-coded to a
+    specific gateway: any response header whose name mentions a provider/model/channel
+    is kept, minus a denylist of ids, versions and rate-limit noise.
     """
     hint = {}
-    for name in ('x-magpie-provider', 'x-magpie-model', 'x-new-api-version'):
-        value = headers.get(name)
+    for name, value in headers.items():
+        lowered = name.lower()
+        if not lowered.startswith('x-') or any(lowered.startswith(deny) for deny in HINT_DENY):
+            continue
+        if not any(word in lowered for word in HINT_KEYWORDS):
+            continue
         if isinstance(value, str) and value.strip():
-            hint[name] = value.strip()[:120]
+            hint[lowered] = value.strip()[:120]
+        if len(hint) >= 6:
+            break
     return hint or None
 
 

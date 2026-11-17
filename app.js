@@ -370,17 +370,17 @@ function providerLabel(model) {
   const candidates = modelProviderMap.get(model);
   const providers = (managementData?.providers || []).map(p => p.provider);
   if (candidates && candidates.size) {
-    const sorted = [...candidates].sort((a, b) => {
+    const ordered = [...candidates].sort((a, b) => {
       const ia = providers.indexOf(a), ib = providers.indexOf(b);
       return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
     });
-    return { name: sorted[0], count: candidates.size };
+    return { names: ordered, count: ordered.length };
   }
   // A namespaced model id already carries its channel: provider/alias.
   const slash = model.indexOf('/');
   if (slash > 0) {
     const prefix = model.slice(0, slash);
-    if (providers.includes(prefix)) return { name: prefix, count: 1 };
+    if (providers.includes(prefix)) return { names: [prefix], count: 1 };
   }
   return null;
 }
@@ -421,15 +421,19 @@ function modelTagHtml(row) {
   const resolved = providerLabel(alias);
   let hint = null;
   try { hint = row.upstream_hint ? JSON.parse(row.upstream_hint) : null; } catch { hint = null; }
-  const vendor = hint && hint['x-magpie-provider'] ? String(hint['x-magpie-provider']) : '';
-  const vendorModel = hint && hint['x-magpie-model'] ? String(hint['x-magpie-model']) : '';
-  const parts = [resolved ? resolved.name : '渠道未在配置中'];
-  if (resolved && resolved.count > 1) parts.push('聚合 ' + resolved.count);
+  /* 上游自报指纹：按关键字取，不绑定任何一家网关的头名 */
+  const hintValues = hint ? Object.entries(hint)
+    .filter(([key]) => /provider|channel|upstream|backend|vendor|served/i.test(key))
+    .map(([, value]) => String(value))
+    .filter(Boolean) : [];
+  const vendor = hintValues[0] || '';
+  const parts = [resolved ? resolved.names.join(' · ') : '渠道未在配置中'];
   if (vendor) parts.push('上游 ' + vendor);
   const provider = parts.join(' · ');
+  const hintText = hintValues.length ? '；上游自报 ' + hintValues.join(' / ') : '';
   const title = resolved
-    ? '按当前配置匹配' + (upstream || vendorModel ? '；上游实际模型 ' + (vendorModel || upstream) : '')
-    : '该别名不在任何渠道的模型列表中';
+    ? '按当前配置匹配' + (upstream ? '；上游实际模型 ' + upstream : '') + hintText
+    : '该别名不在任何渠道的模型列表中' + hintText;
   return '<span class="tag-pair"><span class="tag p-tag" title="' + escapeHtml(title) + '">' + escapeHtml(provider) + '</span>'
     + '<span class="tag m-tag" title="' + escapeHtml(escapeHtml(upstream || alias)) + '">' + escapeHtml(alias) + '</span></span>';
 }

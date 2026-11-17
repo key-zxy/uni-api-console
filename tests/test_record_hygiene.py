@@ -20,13 +20,19 @@ class SkipProbeTests(unittest.TestCase):
 
 
 class UpstreamHintTests(unittest.TestCase):
-    def test_vendor_fingerprints_are_kept(self):
+    def test_vendor_fingerprints_are_kept_generically(self):
         hints = audit_console.upstream_hint({
             'x-magpie-provider': 'sensenova', 'x-magpie-model': 'sensenova/deepseek-flash',
+            'X-Upstream-Channel': 'minekuai', 'x-magpie-archive-id': '044513-abc',
+            'x-uni-api-runtime': 'rust', 'x-ratelimit-remaining': '9',
             'x-new-api-version': 'v0.0.0-rc44', 'content-type': 'application/json'})
         self.assertEqual(hints['x-magpie-provider'], 'sensenova')
         self.assertEqual(hints['x-magpie-model'], 'sensenova/deepseek-flash')
-        self.assertNotIn('content-type', hints)
+        self.assertEqual(hints['x-upstream-channel'], 'minekuai')
+        # ids, runtime markers, rate limits, versions and non-x headers are noise
+        for dropped in ('x-magpie-archive-id', 'x-uni-api-runtime', 'x-ratelimit-remaining',
+                        'x-new-api-version', 'content-type'):
+            self.assertNotIn(dropped, hints)
 
     def test_no_fingerprint_returns_none(self):
         self.assertIsNone(audit_console.upstream_hint({'server': 'nginx'}))
