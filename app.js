@@ -427,13 +427,14 @@ function modelTagHtml(row) {
     .map(([, value]) => String(value))
     .filter(Boolean) : [];
   const vendor = hintValues[0] || '';
-  const parts = [resolved ? resolved.names.join(' · ') : '渠道未在配置中'];
+  /* uni-api 的请求统计给出精确渠道；拿不到时才回退到按配置推断 */
+  const exact = row.upstream_channel || '';
+  const parts = [exact || (resolved ? resolved.names.join(' · ') : '渠道未在配置中')];
   if (vendor) parts.push('上游 ' + vendor);
   const provider = parts.join(' · ');
   const hintText = hintValues.length ? '；上游自报 ' + hintValues.join(' / ') : '';
-  const title = resolved
-    ? '按当前配置匹配' + (upstream ? '；上游实际模型 ' + upstream : '') + hintText
-    : '该别名不在任何渠道的模型列表中' + hintText;
+  const basis = exact ? 'uni-api 请求统计实测渠道' : '按当前配置匹配（该次请求的渠道未知）';
+  const title = basis + (upstream ? '；上游实际模型 ' + upstream : '') + hintText;
   return '<span class="tag-pair"><span class="tag p-tag" title="' + escapeHtml(title) + '">' + escapeHtml(provider) + '</span>'
     + '<span class="tag m-tag" title="' + escapeHtml(escapeHtml(upstream || alias)) + '">' + escapeHtml(alias) + '</span></span>';
 }

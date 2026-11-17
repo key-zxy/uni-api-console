@@ -19,6 +19,7 @@ class Settings:
     snapshot_path: str = ''
     management_key: str = field(default='', repr=False)
     config_path: str = ''
+    upstream_stats: str = ''  # read-only uni-api stats.db, enables exact channel attribution
     provider_hosts: tuple = ()  # Legacy compatibility only; authenticated submissions approve provider trust.
     allow_nonloopback_bind: bool = False
 
@@ -51,7 +52,7 @@ class Settings:
                    port=int(e.get('AUDIT_PORT','8787')), request_cap=int(e.get('AUDIT_REQUEST_CAP','8388608')),
                    response_cap=int(e.get('AUDIT_RESPONSE_CAP','16777216')),
                    retention_days=int(e.get('AUDIT_RETENTION_DAYS','7')), management_key=e.get('AUDIT_MANAGEMENT_KEY',''),
-                   config_path=e.get('AUDIT_CONFIG_PATH',''), provider_hosts=tuple(h.strip().lower() for h in e.get('AUDIT_PROVIDER_HOSTS','').split(',') if h.strip()), schema_path=e.get('AUDIT_SCHEMA_PATH',''), snapshot_path=e.get('AUDIT_SNAPSHOT_PATH',''),
+                   config_path=e.get('AUDIT_CONFIG_PATH',''), provider_hosts=tuple(h.strip().lower() for h in e.get('AUDIT_PROVIDER_HOSTS','').split(',') if h.strip()), schema_path=e.get('AUDIT_SCHEMA_PATH',''), snapshot_path=e.get('AUDIT_SNAPSHOT_PATH',''), upstream_stats=e.get('AUDIT_UPSTREAM_STATS',''),
                    allow_nonloopback_bind=allow_nonloopback)
 
 
@@ -136,7 +137,7 @@ def clean_headers(headers):
     blocked = HOP | {v.strip().lower() for v in headers.get('Connection','').split(',')}
     return CIMultiDict((k,v) for k,v in headers.items() if k.lower() not in blocked | {'host'})
 
-COLUMNS = 'id,started,ended,path,method,model,request_media_type,response_media_type,status,duration,complete,request_truncated,response_truncated,error,prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream,upstream_hint'
+COLUMNS = 'id,started,ended,path,method,model,request_media_type,response_media_type,status,duration,complete,request_truncated,response_truncated,error,prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream,upstream_hint,upstream_channel'
 # 健康检查 / 能力探测等非对话请求不落库，只保留真实调用记录
 SKIP_LOG_PATHS = {'/v1/models', '/api/tags', '/version', '/props', '/v1/props', '/api/show',
                   '/api/v1/models', '/favicon.ico', '/favicon.svg'}
@@ -236,7 +237,7 @@ def create_app(settings):
         request_body BLOB, response_body BLOB, complete INTEGER, request_truncated INTEGER,response_truncated INTEGER,error TEXT);''')
         for column, definition in (('prompt_tokens','INTEGER'),('completion_tokens','INTEGER'),('cached_tokens','INTEGER'),
                                    ('actual_model','TEXT'),('client_key','TEXT'),('client_pool','TEXT'),('client_name','TEXT'),
-                                   ('first_byte','REAL'),('stream','INTEGER'),('upstream_hint','TEXT')):
+                                   ('first_byte','REAL'),('stream','INTEGER'),('upstream_hint','TEXT'),('upstream_channel','TEXT')):
             if column not in {row[1] for row in db.execute('PRAGMA table_info(requests)')}:
                 db.execute('ALTER TABLE requests ADD COLUMN '+column+' '+definition)
         db.commit()
@@ -260,6 +261,26 @@ def create_app(settings):
             db.close()
             state['management_db'].close()
     app.cleanup_ctx.append(lifecycle)
+
+    async def resolve_channel(row_id, model, prompt, completion, started):
+        """Fill upstream_channel from uni-api's stats once its write lands."""
+        try:
+            import attribution
+        except Exception:
+            return
+        for delay in (0.3, 1.2, 3.0):
+            await asyncio.sleep(delay)
+            try:
+                channel = attribution.lookup(s.upstream_stats, model, prompt, completion, started)
+            except Exception:
+                channel = None
+            if channel:
+                try:
+                    with state['db'] as db:
+                        db.execute('UPDATE requests SET upstream_channel=? WHERE id=?', (channel, row_id))
+                except Exception:
+                    pass
+                return
 
     async def proxy(r):
         started = time.time()
@@ -337,6 +358,10 @@ def create_app(settings):
                     prompt, completion, cached, actual_model = parse_usage(bytes(resp), media)
                 except Exception:
                     prompt = completion = cached = actual_model = None
+                # Exact channel: uni-api records provider/model/tokens per request in its
+                # own SQLite stats. Matching is strict (same model, same token counts,
+                # bounded window) and silently degrades to "unknown" when ambiguous.
+                served_channel = None
                 # Attribute the request to a client pool / name from the management index.
                 # Read from the separate management DB first; never nest transactions on state['db'].
                 match = None
@@ -352,15 +377,18 @@ def create_app(settings):
                         row = db.execute(
                             '''INSERT INTO requests(started,ended,path,method,model,request_media_type,
                         response_media_type,status,duration,request_body,response_body,complete,request_truncated,response_truncated,error,
-                        prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream,upstream_hint)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream,upstream_hint,upstream_channel)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                             (started,ended,r.path,r.method,model,r.headers.get('Content-Type'),media,status,duration,
                              strip_inline_base64(bytes(req)),strip_inline_base64(bytes(resp)),int(finished and not req_trunc and not resp_trunc),int(req_trunc),int(resp_trunc),error,
                              prompt,completion,cached,actual_model,client_key,
                              match[0] if match and match[0] else None,
                              match[1] if match and match[1] else None,
                              first_byte,stream,
-                             json.dumps(hint_headers,ensure_ascii=False) if hint_headers else None))
+                             json.dumps(hint_headers,ensure_ascii=False) if hint_headers else None,
+                             served_channel))
+                        if model:
+                            asyncio.create_task(resolve_channel(row.lastrowid, model, prompt, completion, started))
                         request_id = row.lastrowid
                 except Exception:
                     request_id = None

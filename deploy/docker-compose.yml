@@ -19,11 +19,13 @@ services:
       AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-7}
       AUDIT_SCHEMA_PATH: /v1/channel-settings/schema
       AUDIT_SNAPSHOT_PATH: /v1/channel-settings/management-snapshot
+      AUDIT_UPSTREAM_STATS: /uni-api-stats/stats.db
     ports:
       - "${AUDIT_BIND_ADDRESS:-127.0.0.1}:${AUDIT_PORT_PUBLISHED:-8787}:8787"
     volumes:
       - ./audit-data:/data
       - ./uni-api/config:/config
+      - ./uni-api/data:/uni-api-stats:ro
     networks:
       - control
     user: "1000:1000"
