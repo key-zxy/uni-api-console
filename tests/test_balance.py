@@ -71,6 +71,38 @@ class HelperTests(IsolatedAsyncioTestCase):
         self.assertAlmostEqual(reading['percent'], 75.0)
         self.assertEqual(reading['label'], '本月额度')
 
+    def test_manual_mode_counts_local_tokens_and_honours_anchor(self):
+        config = {'mode': 'manual', 'unit': 'tokens', 'limit_value': 50_000_000, 'reset': 'day', 'label': ''}
+        reading = usage.build_manual('minekuai', config, 12_000_000, 340)
+        self.assertTrue(reading['ok'])
+        self.assertAlmostEqual(reading['used'], 12_000_000)
+        self.assertAlmostEqual(reading['remaining'], 38_000_000)
+        self.assertAlmostEqual(reading['percent'], 76.0, places=3)
+        self.assertEqual(reading['label'], '今日额度')
+        # An operator-written anchor wins over the local tally (money panels).
+        money = {'mode': 'manual', 'unit': 'cny', 'limit_value': 80, 'reset': 'day', 'manual_remaining': 55.92}
+        anchored = usage.build_manual('all-in-one', money, 900_000, 42)
+        self.assertAlmostEqual(anchored['remaining'], 55.92)
+        self.assertAlmostEqual(anchored['percent'], 69.9, places=2)
+        self.assertEqual(anchored['detail']['本地已用tokens'], 900_000)
+        self.assertEqual(anchored['detail']['本地请求数'], 42)
+
+    def test_manual_money_price_and_missing_limit(self):
+        priced = usage.build_manual('x', {'mode': 'manual', 'unit': 'cny', 'limit_value': 80,
+                                          'price_per_million': 2.0}, 5_000_000, 10)
+        self.assertAlmostEqual(priced['used'], 10.0)
+        self.assertAlmostEqual(priced['remaining'], 70.0)
+        broken = usage.build_manual('x', {'mode': 'manual', 'unit': 'tokens', 'limit_value': None}, 0, 0)
+        self.assertFalse(broken['ok'])
+        self.assertIn('限额', broken['error'])
+
+    def test_period_start_is_daily_or_lifetime(self):
+        self.assertEqual(usage._period_start('total', 'Asia/Shanghai'), 0.0)
+        import time as _time
+        start = usage._period_start('day', 'Asia/Shanghai')
+        self.assertLessEqual(start, _time.time())
+        self.assertGreater(start, _time.time() - 86400 - 1)
+
     def test_scrub_removes_key_shaped_text(self):
         self.assertNotIn('sk-abcdef123', usage.scrub('boom sk-abcdef123 boom'))
 
@@ -183,6 +215,24 @@ class RouteTests(IsolatedAsyncioTestCase):
         self.assertEqual((await self.call('POST', body={'provider': 'amd', 'mode': 'bogus'})).status, 400)
         self.assertEqual((await self.call('POST', body={'provider': 'ghost', 'mode': 'amd'})).status, 400)
         self.assertEqual((await self.call('POST', body={'provider': 'amd', 'mode': 'custom', 'unit': 'BTC'})).status, 400)
+
+    async def test_manual_mode_saves_and_reports_a_window(self):
+        saved = await self.call('POST', body={'provider': 'all-in-one', 'mode': 'manual', 'url': '',
+                                              'unit': 'cny', 'label': '', 'limit_value': 80, 'reset': 'day',
+                                              'price_per_million': None, 'manual_remaining': 55.92,
+                                              'models': 'deepseek-v4.1-flash', 'timezone': 'Asia/Shanghai'})
+        self.assertEqual(saved.status, 200)
+        refreshed = await self.call('POST', '/_audit/api/balances/refresh', {'provider': 'all-in-one', 'force': True})
+        entry = (await refreshed.json())['providers'][0]
+        self.assertEqual(entry['mode'], 'manual')
+        self.assertAlmostEqual(entry['reading']['remaining'], 55.92)
+        self.assertAlmostEqual(entry['reading']['total'], 80.0)
+        self.assertEqual(entry['reading']['detail']['周期'], '每日重置')
+
+    async def test_manual_mode_requires_a_limit(self):
+        result = await self.call('POST', body={'provider': 'amd', 'mode': 'manual', 'unit': 'tokens',
+                                               'limit_value': None, 'reset': 'day'})
+        self.assertEqual(result.status, 400)
 
     async def test_unauthorized_without_token(self):
         result = await self.call(headers={'Authorization': 'Bearer wrong'})

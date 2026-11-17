@@ -26,8 +26,9 @@ from aiohttp import ClientTimeout
 from aiohttp import web
 
 MODE_NONE = 'none'
-MODES = ('none', 'openrouter', 'openai_billing', 'amd', 'custom')
-UNITS = ('usd', 'cny', 'credits', 'count', 'percent', 'usd_cents')
+MODES = ('none', 'openrouter', 'openai_billing', 'amd', 'manual', 'custom')
+UNITS = ('usd', 'cny', 'credits', 'count', 'percent', 'usd_cents', 'tokens')
+RESETS = ('day', 'total')
 TTL_SECONDS = 300
 CAP = 256 * 1024
 
@@ -183,6 +184,54 @@ def build_custom(provider, payload, config):
     return _reading(provider, 'custom', used, total, remaining, unit, label)
 
 
+def _period_start(reset, timezone_name, now=None):
+    """Epoch seconds where the current quota window began (0 = no reset)."""
+    if reset != 'day':
+        return 0.0
+    from datetime import datetime
+    try:
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo(timezone_name or 'Asia/Shanghai')
+    except Exception:
+        zone = None
+    local = datetime.now(zone) if zone else datetime.now()
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start.timestamp()
+
+
+def build_manual(provider, config, used_tokens, used_requests):
+    """Operator-written quota: the console counts usage from its own audit log.
+
+    ``limit_value`` is the window budget, ``unit`` the denominator (money, tokens
+    or request count), ``reset`` daily or lifetime, and ``manual_remaining`` an
+    optional anchor read from the provider panel (authoritative when present).
+    """
+    limit = num(config.get('limit_value'))
+    unit = config.get('unit', 'cny')
+    reset = config.get('reset', 'day')
+    anchor = num(config.get('manual_remaining'))
+    price = num(config.get('price_per_million'))
+    detail = {'周期': '每日重置' if reset == 'day' else '永久累计',
+              '本地已用tokens': used_tokens, '本地请求数': used_requests}
+    used = None
+    if unit == 'tokens':
+        used = used_tokens
+    elif unit == 'count':
+        used = used_requests
+    elif unit in ('cny', 'usd') and price:
+        used = used_tokens / 1_000_000.0 * price
+        detail['按单价估算'] = round(used, 4)
+    remaining = anchor if anchor is not None else (limit - used if limit is not None and used is not None else None)
+    if anchor is not None:
+        detail['手填可用'] = anchor
+    if limit is None:
+        return _reading(provider, 'manual', used, None, None, unit, '本地统计', detail, error='未填写限额，请在设置中写入')
+    if remaining is None and unit in ('cny', 'usd'):
+        detail['提示'] = '金额口径需要填写单价或当前可用额度'
+    label = config.get('label') or ('今日额度' if reset == 'day' else '总额度')
+    return _reading(provider, 'manual', used, limit, remaining, unit, label, detail)
+
+
 def _decode(raw):
     """The shared session disables auto-decompress; honour gzip manually."""
     body = bytes(raw)
@@ -234,8 +283,11 @@ def _custom_url(base_url, configured):
     return url
 
 
-async def _read_provider(session, provider, base_url, key, config, fetch):
+async def _read_provider(session, provider, base_url, key, config, fetch, stats=None):
     mode = config.get('mode', MODE_NONE)
+    if mode == 'manual':
+        used_tokens, used_requests = stats() if stats else (0, 0)
+        return build_manual(provider, config, used_tokens, used_requests)
     if mode == MODE_NONE:
         return None
     if not key:
@@ -264,16 +316,44 @@ async def _read_provider(session, provider, base_url, key, config, fetch):
 def install(app, settings, state):
     def db():
         connection = state['management_db']
-        connection.execute('CREATE TABLE IF NOT EXISTS provider_usage(provider TEXT PRIMARY KEY, mode TEXT NOT NULL, url TEXT, used_path TEXT, total_path TEXT, remaining_path TEXT, unit TEXT, label TEXT, updated_at TEXT)')
+        connection.execute('CREATE TABLE IF NOT EXISTS provider_usage(provider TEXT PRIMARY KEY, mode TEXT NOT NULL, url TEXT, used_path TEXT, total_path TEXT, remaining_path TEXT, unit TEXT, label TEXT, updated_at TEXT, limit_value REAL, reset TEXT, price_per_million REAL, manual_remaining REAL, timezone TEXT, models TEXT)')
+        columns = {row[1] for row in connection.execute('PRAGMA table_info(provider_usage)')}
+        for column, definition in (('limit_value', 'REAL'), ('reset', 'TEXT'), ('price_per_million', 'REAL'),
+                                   ('manual_remaining', 'REAL'), ('timezone', 'TEXT'), ('models', 'TEXT')):
+            if column not in columns:
+                connection.execute('ALTER TABLE provider_usage ADD COLUMN %s %s' % (column, definition))
+        connection.commit()
         connection.execute('CREATE TABLE IF NOT EXISTS usage_readings(provider TEXT PRIMARY KEY, checked_at REAL NOT NULL, payload TEXT NOT NULL)')
         return connection
 
     def load_config(provider):
-        row = db().execute('SELECT mode,url,used_path,total_path,remaining_path,unit,label FROM provider_usage WHERE provider=?', (provider,)).fetchone()
+        row = db().execute('SELECT mode,url,used_path,total_path,remaining_path,unit,label,limit_value,reset,price_per_million,manual_remaining,timezone,models FROM provider_usage WHERE provider=?', (provider,)).fetchone()
         if not row:
-            return {'mode': None, 'url': '', 'used_path': '', 'total_path': '', 'remaining_path': '', 'unit': 'usd', 'label': ''}
+            return {'mode': None, 'url': '', 'used_path': '', 'total_path': '', 'remaining_path': '', 'unit': 'usd',
+                    'label': '', 'limit_value': None, 'reset': 'day', 'price_per_million': None,
+                    'manual_remaining': None, 'timezone': 'Asia/Shanghai', 'models': ''}
         return {'mode': row[0], 'url': row[1] or '', 'used_path': row[2] or '', 'total_path': row[3] or '',
-                'remaining_path': row[4] or '', 'unit': row[5] or 'usd', 'label': row[6] or ''}
+                'remaining_path': row[4] or '', 'unit': row[5] or 'usd', 'label': row[6] or '',
+                'limit_value': row[7], 'reset': row[8] or 'day', 'price_per_million': row[9],
+                'manual_remaining': row[10], 'timezone': row[11] or 'Asia/Shanghai', 'models': row[12] or ''}
+
+    def audit_stats(config):
+        """Tokens and request count for this provider's window, from the audit DB."""
+        start = _period_start(config.get('reset', 'day'), config.get('timezone', 'Asia/Shanghai'))
+        patterns = [part.strip() for part in (config.get('models') or '').split(',') if part.strip()]
+        where, params = ['started >= ?'], [start]
+        if patterns:
+            clause = ' OR '.join(['model LIKE ? OR actual_model LIKE ?'] * len(patterns))
+            where.append('(' + clause + ')')
+            for pattern in patterns:
+                params.extend(['%' + pattern + '%', '%' + pattern + '%'])
+        query = ('SELECT COUNT(*), COALESCE(SUM(COALESCE(prompt_tokens,0)+COALESCE(completion_tokens,0)),0) '
+                 'FROM requests WHERE ' + ' AND '.join(where))
+        try:
+            row = state['db'].execute(query, params).fetchone()
+            return (float(row[1] or 0), float(row[0] or 0))
+        except Exception:
+            return (0.0, 0.0)
 
     cache = {'at': 0.0, 'entries': []}
 
@@ -343,7 +423,8 @@ def install(app, settings, state):
             else:
                 fetch_fn = state.get('usage_fetch_override') or fetch
                 used = await _read_provider(session, provider, provider_entry.get('base_url', ''),
-                                            provider_entry.get('api', provider_entry.get('key', '')), config, fetch_fn)
+                                            provider_entry.get('api', provider_entry.get('key', '')), config, fetch_fn,
+                                            stats=lambda: audit_stats(config))
                 cached = used if used is None else {'provider': provider, 'mode': mode,
                                                     'ok': used.get('ok'), 'used': used.get('used'),
                                                     'total': used.get('total'), 'remaining': used.get('remaining'),
@@ -400,10 +481,42 @@ def install(app, settings, state):
             return web.json_response({'error': 'Invalid fields or unsupported change'}, status=400)
         if len(simple['label']) > 60:
             return web.json_response({'error': 'Invalid fields or unsupported change'}, status=400)
+        numeric = {}
+        for field in ('limit_value', 'price_per_million', 'manual_remaining'):
+            value = body.get(field)
+            if value in (None, ''):
+                numeric[field] = None
+                continue
+            number = num(value)
+            if number is None or number < 0 or not (number == number) or number == float('inf'):
+                return web.json_response({'error': 'Invalid fields or unsupported change'}, status=400)
+            numeric[field] = number
+        reset = body.get('reset') or 'day'
+        if reset not in RESETS:
+            return web.json_response({'error': 'Invalid fields or unsupported change'}, status=400)
+        timezone_name = body.get('timezone') or 'Asia/Shanghai'
+        if not isinstance(timezone_name, str) or len(timezone_name) > 64:
+            return web.json_response({'error': 'Invalid fields or unsupported change'}, status=400)
+        try:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(timezone_name)
+        except Exception:
+            return web.json_response({'error': '重置时区无效'}, status=400)
+        models = body.get('models') or ''
+        if not isinstance(models, str) or len(models) > 400:
+            return web.json_response({'error': 'Invalid fields or unsupported change'}, status=400)
+        if mode == 'manual' and numeric['limit_value'] is None:
+            return web.json_response({'error': '本地统计需要填写限额'}, status=400)
         with db():
-            db().execute('INSERT OR REPLACE INTO provider_usage VALUES(?,?,?,?,?,?,?,?,?)',
+            db().execute('''INSERT OR REPLACE INTO provider_usage
+                (provider,mode,url,used_path,total_path,remaining_path,unit,label,updated_at,
+                 limit_value,reset,price_per_million,manual_remaining,timezone,models)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                          (provider, mode, simple['url'], simple['used_path'], simple['total_path'],
-                          simple['remaining_path'], unit, simple['label'], time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())))
+                          simple['remaining_path'], unit, simple['label'],
+                          time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                          numeric['limit_value'], reset, numeric['price_per_million'],
+                          numeric['manual_remaining'], timezone_name, models))
         with db():
             db().execute('DELETE FROM usage_readings WHERE provider=?', (provider,))
         return web.json_response({'saved': {'provider': provider, 'mode': mode}})

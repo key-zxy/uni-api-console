@@ -96,8 +96,26 @@ vm.runInNewContext(fs.readFileSync('app.js', 'utf8'), context);
   await el('balance-form').onsubmit();
   const saveCall = calls.find(([url]) => url.endsWith('/_audit/api/balances'));
   assert.ok(saveCall, 'save posts the settings');
-  assert.deepEqual(saveCall[1], { provider: 'openrouter', mode: 'custom', url: '/v1/custom/quota',
-    used_path: 'data[0].used', total_path: 'data[0].total', remaining_path: '', unit: 'usd', label: '本月额度' });
+  assert.equal(saveCall[1].mode, 'custom');
+  assert.equal(saveCall[1].url, '/v1/custom/quota');
+  assert.equal(saveCall[1].used_path, 'data[0].used');
+  assert.equal(saveCall[1].unit, 'usd');
+  // 本地统计：限额/周期/单价/锚点/模型过滤都随表单提交
+  el('balance-mode').value = 'manual';
+  el('balance-mode').onchange();
+  assert.equal(el('balance-manual-fields').hidden, false, 'manual fields appear for local-ledger mode');
+  el('balance-limit').value = '80';
+  el('balance-reset').value = 'day';
+  el('balance-price').value = '';
+  el('balance-manual-remaining').value = '55.92';
+  el('balance-models').value = 'deepseek-v4.1-flash';
+  el('balance-timezone').value = 'Asia/Shanghai';
+  await el('balance-form').onsubmit();
+  const manualCall = calls.filter(([url]) => url.endsWith('/_audit/api/balances')).at(-1);
+  assert.deepEqual(manualCall[1], { provider: 'openrouter', mode: 'manual', url: '/v1/custom/quota',
+    used_path: 'data[0].used', total_path: 'data[0].total', remaining_path: '', unit: 'usd', label: '本月额度',
+    limit_value: 80, reset: 'day', price_per_million: null, manual_remaining: 55.92,
+    models: 'deepseek-v4.1-flash', timezone: 'Asia/Shanghai' });
   assert.equal(el('balance-dialog').closed, true);
   assert.deepEqual(calls.at(-1)[1], { provider: 'openrouter', force: true }, 'saving refreshes that provider');
 

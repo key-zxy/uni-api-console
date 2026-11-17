@@ -162,15 +162,26 @@
             <option value="openrouter">OpenRouter（/credits + /key）</option>
             <option value="openai_billing">OpenAI 计费（billing/subscription + usage）</option>
             <option value="amd">AMD Radeon（/key + /usage 日预算）</option>
+            <option value="manual">本地统计（自己写限额，按请求日志累计）</option>
             <option value="custom">自定义（URL + JSON 路径）</option>
           </select></label>
+          <div id="balance-manual-fields" hidden>
+            <label class="field"><span>限额（按下面的单位与周期）</span><input id="balance-limit" type="number" min="0" step="any" placeholder="80"></label>
+            <label class="field"><span>重置周期</span><select id="balance-reset">
+              <option value="day">每日重置</option><option value="total">永久累计</option>
+            </select></label>
+            <label class="field"><span>每百万 token 单价（金额口径时可留空，改用「当前可用」）</span><input id="balance-price" type="number" min="0" step="any" placeholder="例如 2.0"></label>
+            <label class="field"><span>当前可用（可选，手填上游显示的数字，优先于本地累计）</span><input id="balance-manual-remaining" type="number" min="0" step="any" placeholder="55.92"></label>
+            <label class="field"><span>模型过滤（可选，逗号分隔；留空统计全部请求）</span><input id="balance-models" placeholder="deepseek-v4.1-flash-1017"></label>
+            <label class="field"><span>重置时区</span><input id="balance-timezone" value="Asia/Shanghai" placeholder="Asia/Shanghai"></label>
+          </div>
           <div id="balance-custom-fields" hidden>
             <label class="field"><span>URL（/ 开头为相对渠道根地址，或 https 同主机地址）</span><input id="balance-url" placeholder="/v1/my/quota"></label>
             <label class="field"><span>已用路径（JSON 路径，如 data.used[0].value）</span><input id="balance-used-path" placeholder="data.used"></label>
             <label class="field"><span>总量路径</span><input id="balance-total-path" placeholder="data.total"></label>
             <label class="field"><span>剩余路径（可选，缺省=总量−已用）</span><input id="balance-remaining-path" placeholder="data.remaining"></label>
             <label class="field"><span>单位</span><select id="balance-unit">
-              <option value="usd">美元</option><option value="cny">人民币</option><option value="credits">点数</option><option value="count">次数</option><option value="percent">百分比</option><option value="usd_cents">美分（显示为美元）</option>
+              <option value="usd">美元</option><option value="cny">人民币</option><option value="credits">点数</option><option value="count">次数</option><option value="tokens">token 数</option><option value="percent">百分比</option><option value="usd_cents">美分（显示为美元）</option>
             </select></label>
             <label class="field"><span>标签（如「本月额度」）</span><input id="balance-label" maxlength="60" placeholder="本月额度"></label>
           </div>

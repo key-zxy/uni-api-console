@@ -522,8 +522,8 @@ const parseModels = id => lines(id).map(line => {
 });
 
 /* 上游余量：每个渠道一个进度条，余量方式可自定义。 */
-const MODE_LABELS = {none: '不查询', openrouter: 'OpenRouter', openai_billing: 'OpenAI 计费', amd: 'AMD 日预算', custom: '自定义'};
-const UNIT_LABELS = {usd: '美元', cny: '元', credits: '点', count: '次', percent: '%'};
+const MODE_LABELS = {none: '不查询', openrouter: 'OpenRouter', openai_billing: 'OpenAI 计费', amd: 'AMD 日预算', manual: '本地统计', custom: '自定义'};
+const UNIT_LABELS = {usd: '美元', cny: '元', credits: '点', count: '次', percent: '%', tokens: 'token'};
 let balancesData = null;
 let balanceLoaded = false;
 
@@ -532,6 +532,11 @@ function fmtAmount(value, unit) {
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
   if (number >= 1e6) return '∞';
+  if (unit === 'tokens') {
+    if (number >= 1e8) return (number / 1e8).toFixed(2) + ' 亿';
+    if (number >= 1e4) return (number / 1e4).toFixed(1) + ' 万';
+    return String(Math.round(number));
+  }
   const text = Math.abs(number) >= 100 ? number.toFixed(0) : number.toFixed(2);
   if (unit === 'percent') return text + '%';
   if (unit === 'usd') return '$' + text;
@@ -654,8 +659,11 @@ async function refreshBalances(options = {}) {
 }
 
 function toggleBalanceCustom() {
-  const box = $('balance-custom-fields');
-  if (box) box.hidden = $('balance-mode').value !== 'custom';
+  const mode = $('balance-mode').value;
+  const custom = $('balance-custom-fields');
+  if (custom) custom.hidden = mode !== 'custom';
+  const manual = $('balance-manual-fields');
+  if (manual) manual.hidden = mode !== 'manual';
 }
 
 function openBalanceDialog(item) {
@@ -670,6 +678,12 @@ function openBalanceDialog(item) {
   $('balance-remaining-path').value = custom.remaining_path || '';
   $('balance-unit').value = custom.unit || 'usd';
   $('balance-label').value = custom.label || '';
+  $('balance-limit').value = custom.limit_value === null || custom.limit_value === undefined ? '' : custom.limit_value;
+  $('balance-reset').value = custom.reset || 'day';
+  $('balance-price').value = custom.price_per_million === null || custom.price_per_million === undefined ? '' : custom.price_per_million;
+  $('balance-manual-remaining').value = custom.manual_remaining === null || custom.manual_remaining === undefined ? '' : custom.manual_remaining;
+  $('balance-models').value = custom.models || '';
+  $('balance-timezone').value = custom.timezone || 'Asia/Shanghai';
   toggleBalanceCustom();
   dialog.showModal();
 }
@@ -689,11 +703,21 @@ if (balanceForm) balanceForm.onsubmit = action(async () => {
     total_path: $('balance-total-path').value.trim(),
     remaining_path: $('balance-remaining-path').value.trim(),
     unit: $('balance-unit').value,
-    label: $('balance-label').value.trim()
+    label: $('balance-label').value.trim(),
+    limit_value: $('balance-limit').value.trim() === '' ? null : Number($('balance-limit').value),
+    reset: $('balance-reset').value,
+    price_per_million: $('balance-price').value.trim() === '' ? null : Number($('balance-price').value),
+    manual_remaining: $('balance-manual-remaining').value.trim() === '' ? null : Number($('balance-manual-remaining').value),
+    models: $('balance-models').value.trim(),
+    timezone: $('balance-timezone').value.trim() || 'Asia/Shanghai'
   };
   if (payload.mode === 'custom' && !payload.url) {
     if (message) message.textContent = '自定义方式需要填写 URL';
     throw new Error('自定义方式需要填写 URL');
+  }
+  if (payload.mode === 'manual' && !(payload.limit_value > 0)) {
+    if (message) message.textContent = '本地统计需要填写大于 0 的限额';
+    throw new Error('本地统计需要填写大于 0 的限额');
   }
   try {
     await api('balances', {method: 'POST', body: JSON.stringify(payload)});
