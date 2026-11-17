@@ -183,10 +183,20 @@ def build_custom(provider, payload, config):
     return _reading(provider, 'custom', used, total, remaining, unit, label)
 
 
+def _decode(raw):
+    """The shared session disables auto-decompress; honour gzip manually."""
+    body = bytes(raw)
+    if body[:2] == b'\x1f\x8b':
+        import gzip
+        body = gzip.decompress(body)
+    return body
+
+
 async def _fetch_json(session, url, key, cap=CAP):
     async with session.get(
             url,
-            headers={'Authorization': 'Bearer ' + key, 'Accept': 'application/json'},
+            headers={'Authorization': 'Bearer ' + key, 'Accept': 'application/json',
+                     'Accept-Encoding': 'identity'},
             allow_redirects=False,
             timeout=ClientTimeout(total=20)) as response:
         raw = bytearray()
@@ -196,7 +206,7 @@ async def _fetch_json(session, url, key, cap=CAP):
                 raise ValueError('response too large')
         if response.status != 200:
             raise ValueError('HTTP %d' % response.status)
-        return json.loads(raw)
+        return json.loads(_decode(raw))
 
 
 def _endpoint(base_url, path):
@@ -277,7 +287,8 @@ def install(app, settings, state):
         try:
             async with session.get(
                     settings.upstream.rstrip('/') + '/v1/api_config',
-                    headers={'Authorization': 'Bearer ' + settings.management_key},
+                    headers={'Authorization': 'Bearer ' + settings.management_key,
+                             'Accept-Encoding': 'identity'},
                     allow_redirects=False,
                     timeout=ClientTimeout(total=20)) as response:
                 raw = bytearray()
@@ -287,7 +298,7 @@ def install(app, settings, state):
                         raise ValueError('config too large')
                 if response.status != 200:
                     raise ValueError('HTTP %d' % response.status)
-                config = json.loads(raw).get('api_config')
+                config = json.loads(_decode(raw)).get('api_config')
         except Exception:
             raise web.HTTPServiceUnavailable(text='native configuration unavailable') from None
         providers = config.get('providers') if isinstance(config, dict) else None
