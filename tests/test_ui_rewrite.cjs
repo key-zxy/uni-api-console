@@ -51,7 +51,7 @@ function boot() {
   await w.eval('refresh()');
   assert.equal(w.document.querySelector('#rows img'),null,'API-controlled text must not become HTML');
   assert.match(w.document.querySelector('#rows').textContent,/200/,'keep exact HTTP status');
-  assert.equal(w.document.querySelector('#rows .model-cell .p-tag')?.textContent,'渠道待确认','same model in two channels must not pick last provider');
+  assert.equal(w.document.querySelector('#rows .model-cell .p-tag')?.textContent,'one · 聚合 2','an aggregated alias shows the first channel plus the channel count');
   w.document.querySelector('#pool-dialog').close();
   w.eval('openClient(testData.clients[0])');
   w.fetch=async()=>({ok:false,status:409,json:async()=>({error:'测试：配置已变化'})});

@@ -136,9 +136,51 @@ def clean_headers(headers):
     blocked = HOP | {v.strip().lower() for v in headers.get('Connection','').split(',')}
     return CIMultiDict((k,v) for k,v in headers.items() if k.lower() not in blocked | {'host'})
 
-COLUMNS = 'id,started,ended,path,method,model,request_media_type,response_media_type,status,duration,complete,request_truncated,response_truncated,error,prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream'
+COLUMNS = 'id,started,ended,path,method,model,request_media_type,response_media_type,status,duration,complete,request_truncated,response_truncated,error,prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream,upstream_hint'
 # 健康检查 / 能力探测等非对话请求不落库，只保留真实调用记录
-SKIP_LOG_PATHS = {'/v1/models', '/api/tags', '/version', '/props', '/v1/props', '/api/show'}
+SKIP_LOG_PATHS = {'/v1/models', '/api/tags', '/version', '/props', '/v1/props', '/api/show',
+                  '/api/v1/models', '/favicon.ico', '/favicon.svg'}
+SKIP_LOG_SUFFIXES = ('/models', '/props', '/tags', '/api/show', '/version')
+
+
+def should_log(path):
+    """Health checks and capability probes are not conversations: never persist them."""
+    if not path or path in ('/', ''):
+        return False
+    if path in SKIP_LOG_PATHS:
+        return False
+    return not path.rstrip('/').endswith(SKIP_LOG_SUFFIXES)
+
+
+def upstream_hint(headers):
+    """Vendor fingerprints the upstream gateway adds (not the uni-api channel name).
+
+    uni-api exposes no per-request channel header, but some upstreams stamp their own
+    provider/model (e.g. ``x-magpie-provider``), which is the only per-request signal
+    available for an alias served by several channels.
+    """
+    hint = {}
+    for name in ('x-magpie-provider', 'x-magpie-model', 'x-new-api-version'):
+        value = headers.get(name)
+        if isinstance(value, str) and value.strip():
+            hint[name] = value.strip()[:120]
+    return hint or None
+
+
+DATA_URI = re.compile(rb'data:([A-Za-z0-9.+/-]+);base64,[A-Za-z0-9+/=\\]+')
+BASE64_RUN = re.compile(rb'[A-Za-z0-9+/]{400,}={0,2}')
+
+
+def strip_inline_base64(body):
+    """Drop inline media payloads from the stored copy (the proxy still forwards them).
+
+    A single base64 image makes a request row megabytes wide and renders as an
+    unreadable wall in the detail panel, so it is replaced by a size marker.
+    """
+    if not body:
+        return body
+    body = DATA_URI.sub(lambda m: b'data:' + m.group(1) + b';base64,[base64 ' + str(len(m.group(0))).encode() + b' bytes]', body)
+    return BASE64_RUN.sub(lambda m: b'[base64 ' + str(len(m.group(0))).encode() + b' bytes]', body)
 
 def create_app(settings):
     s = settings
@@ -183,7 +225,7 @@ def create_app(settings):
         request_body BLOB, response_body BLOB, complete INTEGER, request_truncated INTEGER,response_truncated INTEGER,error TEXT);''')
         for column, definition in (('prompt_tokens','INTEGER'),('completion_tokens','INTEGER'),('cached_tokens','INTEGER'),
                                    ('actual_model','TEXT'),('client_key','TEXT'),('client_pool','TEXT'),('client_name','TEXT'),
-                                   ('first_byte','REAL'),('stream','INTEGER')):
+                                   ('first_byte','REAL'),('stream','INTEGER'),('upstream_hint','TEXT')):
             if column not in {row[1] for row in db.execute('PRAGMA table_info(requests)')}:
                 db.execute('ALTER TABLE requests ADD COLUMN '+column+' '+definition)
         db.commit()
@@ -212,6 +254,7 @@ def create_app(settings):
         started = time.time()
         tick = time.monotonic()
         req, resp = bytearray(), bytearray()
+        hint_headers = None
         req_trunc = resp_trunc = finished = False
         status = None
         media = model = error = None
@@ -246,6 +289,7 @@ def create_app(settings):
                 media = upstream.headers.get('Content-Type')
                 if media and 'text/event-stream' in media.lower():
                     stream = 1
+                hint_headers = upstream_hint(upstream.headers)
                 out = web.StreamResponse(status=status,headers=clean_headers(upstream.headers))
                 await out.prepare(r)
                 async for chunk in upstream.content.iter_chunked(65536):
@@ -277,13 +321,11 @@ def create_app(settings):
         finally:
             ended = time.time()
             duration = time.monotonic()-tick
-            if r.path not in SKIP_LOG_PATHS:
+            if should_log(r.path):
                 try:
                     prompt, completion, cached, actual_model = parse_usage(bytes(resp), media)
                 except Exception:
                     prompt = completion = cached = actual_model = None
-                if actual_model:
-                    model = actual_model
                 # Attribute the request to a client pool / name from the management index.
                 # Read from the separate management DB first; never nest transactions on state['db'].
                 match = None
@@ -299,14 +341,15 @@ def create_app(settings):
                         row = db.execute(
                             '''INSERT INTO requests(started,ended,path,method,model,request_media_type,
                         response_media_type,status,duration,request_body,response_body,complete,request_truncated,response_truncated,error,
-                        prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                        prompt_tokens,completion_tokens,cached_tokens,actual_model,client_key,client_pool,client_name,first_byte,stream,upstream_hint)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                             (started,ended,r.path,r.method,model,r.headers.get('Content-Type'),media,status,duration,
-                             bytes(req),bytes(resp),int(finished and not req_trunc and not resp_trunc),int(req_trunc),int(resp_trunc),error,
+                             strip_inline_base64(bytes(req)),strip_inline_base64(bytes(resp)),int(finished and not req_trunc and not resp_trunc),int(req_trunc),int(resp_trunc),error,
                              prompt,completion,cached,actual_model,client_key,
                              match[0] if match and match[0] else None,
                              match[1] if match and match[1] else None,
-                             first_byte,stream))
+                             first_byte,stream,
+                             json.dumps(hint_headers,ensure_ascii=False) if hint_headers else None))
                         request_id = row.lastrowid
                 except Exception:
                     request_id = None

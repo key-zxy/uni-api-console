@@ -155,7 +155,7 @@ function renderRecords(rows) {
       const detail = await api('requests/' + row.id);
       selected = row.id;
       $('delete').disabled = false;
-      $('detail').textContent = JSON.stringify(detail, null, 2);
+      $('detail').textContent = JSON.stringify(readableRecord(detail), null, 2);
       $('audit-dialog').showModal();
     });
     td.append(button);
@@ -365,19 +365,73 @@ function buildModelProviderMap() {
 function makeTag(text, type) {
   const node = document.createElement('span'); node.className = 'tag ' + type; node.textContent = text; return node;
 }
+function providerLabel(model) {
+  if (!model) return null;
+  const candidates = modelProviderMap.get(model);
+  const providers = (managementData?.providers || []).map(p => p.provider);
+  if (candidates && candidates.size) {
+    const sorted = [...candidates].sort((a, b) => {
+      const ia = providers.indexOf(a), ib = providers.indexOf(b);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+    return { name: sorted[0], count: candidates.size };
+  }
+  // A namespaced model id already carries its channel: provider/alias.
+  const slash = model.indexOf('/');
+  if (slash > 0) {
+    const prefix = model.slice(0, slash);
+    if (providers.includes(prefix)) return { name: prefix, count: 1 };
+  }
+  return null;
+}
+
+/* 模型列显示客户端请求的别名；上游真实模型名放进 title。 */
+function decodeStoredBody(base64Text) {
+  try {
+    const binary = atob(base64Text);
+    const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0));
+    const text = new TextDecoder('utf-8', {fatal: false}).decode(bytes);
+    return stripBase64InText(text);
+  } catch { return '[二进制内容，已省略]'; }
+}
+
+function stripBase64InText(text) {
+  return String(text).replace(/data:[\w.+-]+\/[\w.+-]+;base64,[A-Za-z0-9+/=]{80,}/g, '[base64 已省略]')
+                     .replace(/[A-Za-z0-9+/]{400,}={0,2}/g, m => '[base64 ' + m.length + ' 字符已省略]');
+}
+
+function readableRecord(record) {
+  const view = {...record};
+  for (const field of ['request_body_base64', 'response_body_base64']) {
+    if (typeof view[field] === 'string') {
+      const text = decodeStoredBody(view[field]);
+      view[field.replace('_base64', '_text')] = text.length > 1200 ? text.slice(0, 1200) + ' …（共 ' + text.length + ' 字符）' : text;
+      delete view[field];
+    }
+  }
+  return view;
+}
+
 function modelTagHtml(row) {
-  const model = row.actual_model || row.model || null;
-  if (!model) {
+  const alias = row.model || row.actual_model || null;
+  const upstream = row.actual_model && row.actual_model !== alias ? row.actual_model : null;
+  if (!alias) {
     return '<span class="tag neutral m-tag" title="' + escapeHtml(row.path || '') + '">' + escapeHtml(row.path || '未知') + '</span>';
   }
-  const candidates = modelProviderMap.get(model);
-  const provider = candidates?.size === 1 ? [...candidates][0] : '渠道待确认';
-  const escM = escapeHtml(model);
-  const escP = escapeHtml(provider);
-  if (provider) {
-    return '<span class="tag-pair"><span class="tag p-tag" title="按当前配置匹配，不代表已验证实际路由">' + escP + '</span><span class="tag m-tag" title="' + escM + '">' + escM + '</span></span>';
-  }
-  return '<span class="tag m-tag" title="' + escM + '">' + escM + '</span>';
+  const resolved = providerLabel(alias);
+  let hint = null;
+  try { hint = row.upstream_hint ? JSON.parse(row.upstream_hint) : null; } catch { hint = null; }
+  const vendor = hint && hint['x-magpie-provider'] ? String(hint['x-magpie-provider']) : '';
+  const vendorModel = hint && hint['x-magpie-model'] ? String(hint['x-magpie-model']) : '';
+  const parts = [resolved ? resolved.name : '渠道未在配置中'];
+  if (resolved && resolved.count > 1) parts.push('聚合 ' + resolved.count);
+  if (vendor) parts.push('上游 ' + vendor);
+  const provider = parts.join(' · ');
+  const title = resolved
+    ? '按当前配置匹配' + (upstream || vendorModel ? '；上游实际模型 ' + (vendorModel || upstream) : '')
+    : '该别名不在任何渠道的模型列表中';
+  return '<span class="tag-pair"><span class="tag p-tag" title="' + escapeHtml(title) + '">' + escapeHtml(provider) + '</span>'
+    + '<span class="tag m-tag" title="' + escapeHtml(escapeHtml(upstream || alias)) + '">' + escapeHtml(alias) + '</span></span>';
 }
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"}[c]));
