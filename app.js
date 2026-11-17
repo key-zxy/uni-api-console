@@ -531,12 +531,14 @@ function fmtAmount(value, unit) {
   if (value === null || value === undefined || Number.isNaN(Number(value))) return '—';
   const number = Number(value);
   if (!Number.isFinite(number)) return '—';
-  if (number >= 1e6) return '∞';
   if (unit === 'tokens') {
     if (number >= 1e8) return (number / 1e8).toFixed(2) + ' 亿';
     if (number >= 1e4) return (number / 1e4).toFixed(1) + ' 万';
     return String(Math.round(number));
   }
+  // Only money/points treat a six-figure limit as "effectively unlimited";
+  // token and request counts must print their real value.
+  if ((unit === 'usd' || unit === 'cny' || unit === 'credits') && number >= 1e6) return '∞';
   const text = Math.abs(number) >= 100 ? number.toFixed(0) : number.toFixed(2);
   if (unit === 'percent') return text + '%';
   if (unit === 'usd') return '$' + text;

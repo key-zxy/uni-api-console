@@ -126,5 +126,18 @@ vm.runInNewContext(fs.readFileSync('app.js', 'utf8'), context);
   await el('balance-form').onsubmit();
   assert.equal(calls.some(([url]) => url.endsWith('/_audit/api/balances')), false, 'missing URL blocks the save');
 
+  // token 口径必须显示真实数量（万/亿），不能退化成 ∞
+  responses['balances/refresh'] = { providers: [
+    { provider: 'minekuai', base_url: 'https://minekuai.cn/v1', mode: 'manual', age: 5,
+      reading: { ok: true, used: 1732167, total: 50000000, remaining: 48267833, percent: 96.5, unit: 'tokens',
+                 label: '今日token额度', detail: { '周期': '每日重置' }, error: '' } }
+  ] };
+  await el('balances-refresh-all').onclick();
+  const tokenMeta = el('balances-list').children[0].children[2];
+  const tokenText = tokenMeta.children.map(child => child.textContent).join(' | ');
+  assert.ok(tokenText.includes('4826.8 万'), tokenText);
+  assert.ok(tokenText.includes('5000.0 万'), tokenText);
+  assert.ok(!tokenText.includes('∞'), 'token counts must never render as infinite');
+
   console.log('Balances page: progress bars, mode switching and settings save pass');
 })().catch(error => { console.error(error); process.exit(1); });
