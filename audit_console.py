@@ -262,26 +262,6 @@ def create_app(settings):
             state['management_db'].close()
     app.cleanup_ctx.append(lifecycle)
 
-    async def resolve_channel(row_id, model, prompt, completion, started):
-        """Fill upstream_channel from uni-api's stats once its write lands."""
-        try:
-            import attribution
-        except Exception:
-            return
-        for delay in (0.3, 1.2, 3.0):
-            await asyncio.sleep(delay)
-            try:
-                channel = attribution.lookup(s.upstream_stats, model, prompt, completion, started)
-            except Exception:
-                channel = None
-            if channel:
-                try:
-                    with state['db'] as db:
-                        db.execute('UPDATE requests SET upstream_channel=? WHERE id=?', (channel, row_id))
-                except Exception:
-                    pass
-                return
-
     async def proxy(r):
         started = time.time()
         tick = time.monotonic()
@@ -361,6 +341,8 @@ def create_app(settings):
                 # Exact channel: uni-api records provider/model/tokens per request in its
                 # own SQLite stats. Matching is strict (same model, same token counts,
                 # bounded window) and silently degrades to "unknown" when ambiguous.
+                # Channel/upstream metadata is NOT duplicated here: it lives in uni-api's
+                # own stats DB and is joined back when rows are read.
                 served_channel = None
                 # Attribute the request to a client pool / name from the management index.
                 # Read from the separate management DB first; never nest transactions on state['db'].
@@ -381,14 +363,13 @@ def create_app(settings):
                         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                             (started,ended,r.path,r.method,model,r.headers.get('Content-Type'),media,status,duration,
                              strip_inline_base64(bytes(req)),strip_inline_base64(bytes(resp)),int(finished and not req_trunc and not resp_trunc),int(req_trunc),int(resp_trunc),error,
-                             prompt,completion,cached,actual_model,client_key,
+                             prompt,completion,cached,None,client_key,
                              match[0] if match and match[0] else None,
                              match[1] if match and match[1] else None,
                              first_byte,stream,
                              json.dumps(hint_headers,ensure_ascii=False) if hint_headers else None,
                              served_channel))
-                        if model:
-                            asyncio.create_task(resolve_channel(row.lastrowid, model, prompt, completion, started))
+
                         request_id = row.lastrowid
                 except Exception:
                     request_id = None
@@ -404,7 +385,18 @@ def create_app(settings):
         except ValueError:
             raise web.HTTPBadRequest(text='Invalid offset')
         sql = 'SELECT '+COLUMNS+' FROM requests'+(' WHERE '+' AND '.join(clauses) if clauses else '')+' ORDER BY started DESC,id DESC LIMIT 100 OFFSET ?'
-        return web.json_response([dict(row) for row in state['db'].execute(sql,(*args,offset))])
+        rows = [dict(row) for row in state['db'].execute(sql,(*args,offset))]
+        try:
+            import attribution
+            joined = attribution.enrich(s.upstream_stats, rows)
+        except Exception:
+            joined = {}
+        for row in rows:
+            info = joined.get(row['id'])
+            if info:
+                row['actual_model'] = info.get('upstream_model') or row.get('actual_model')
+                row['upstream_channel'] = info.get('provider') or row.get('upstream_channel')
+        return web.json_response(rows)
 
     async def detail(r):
         row = state['db'].execute('SELECT * FROM requests WHERE id=?',(r.match_info['id'],)).fetchone()
@@ -415,6 +407,14 @@ def create_app(settings):
                 state['db'].execute('DELETE FROM requests WHERE id=?',(row['id'],))
             return web.json_response({'deleted':1})
         d = dict(row)
+        try:
+            import attribution
+            info = attribution.enrich(s.upstream_stats, [d]).get(d['id'])
+            if info:
+                d['actual_model'] = info.get('upstream_model') or d.get('actual_model')
+                d['upstream_channel'] = info.get('provider') or d.get('upstream_channel')
+        except Exception:
+            pass
         import base64
         for key in ('request_body','response_body'):
             raw = d[key]
