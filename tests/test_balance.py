@@ -9,6 +9,7 @@ from aiohttp.test_utils import make_mocked_request
 
 from audit_console import Settings, create_app
 import usage
+import usage as usage_mod
 
 
 class HelperTests(IsolatedAsyncioTestCase):
@@ -51,6 +52,17 @@ class HelperTests(IsolatedAsyncioTestCase):
         self.assertIsNone(reading['percent'])
         self.assertIsNone(reading['remaining'])
         self.assertIn('不限额度', reading['label'])
+
+    def test_billing_daily_window_uses_baseline_and_anchor(self):
+        sub, usage = {'hard_limit_usd': 100000000}, {'total_usage': 1255015.4}
+        config = {'limit_value': 80, 'reset': 'day', 'unit': 'cny', 'label': ''}
+        # Fresh day, baseline captured from the anchor: 80-55.92 = 24.08 used today.
+        reading = usage_mod.build_openai_billing('aio', sub, usage, config, baseline=1255015.4 / 100.0 - 24.08)
+        self.assertAlmostEqual(reading['used'], 24.08, places=3)
+        self.assertAlmostEqual(reading['remaining'], 55.92, places=3)
+        self.assertAlmostEqual(reading['percent'], 69.9, places=2)
+        self.assertEqual(reading['detail']['周期'], '每日重置')
+        self.assertEqual(reading['unit'], 'cny')
 
     def test_amd_daily_budget_reading(self):
         reading = usage.build_amd('amd', {'data': {'usage': '2.97'}}, {

@@ -134,11 +134,27 @@ def build_openrouter(provider, credits_payload, key_payload):
     return _reading(provider, 'openrouter', used, total, remaining, 'usd', '账户余额', detail)
 
 
-def build_openai_billing(provider, subscription, usage):
-    """OpenAI-style billing: hard limit (USD) + cumulative usage (cents)."""
+def build_openai_billing(provider, subscription, usage, config=None, baseline=None):
+    """OpenAI-style billing: cumulative usage (cents) from the upstream panel.
+
+    With ``limit_value`` + ``reset: day`` the cumulative counter is turned into a
+    daily window: today's usage is the difference from a baseline captured once per
+    day (the provider ignores start_date/end_date, so the delta has to be local).
+    """
+    config = config or {}
     total = num((subscription or {}).get('hard_limit_usd'))
     cents = num((usage or {}).get('total_usage'))
-    used = cents / 100.0 if cents is not None else None
+    cumulative = cents / 100.0 if cents is not None else None
+    limit = num(config.get('limit_value'))
+    if limit and config.get('reset', 'day') == 'day' and cumulative is not None:
+        base = cumulative if baseline is None else baseline
+        daily = max(0.0, cumulative - base)
+        remaining = limit - daily
+        detail = {'周期': '每日重置', '今日已用': round(daily, 4), '累计': round(cumulative, 4)}
+        unit = config.get('unit', 'cny')
+        label = config.get('label') or '今日额度'
+        return _reading(provider, 'openai_billing', daily, limit, remaining, unit, label, detail)
+    used = cumulative
     unlimited = total is not None and total >= 1_000_000
     if unlimited:
         label = '累计用量（不限额度）'
@@ -283,7 +299,7 @@ def _custom_url(base_url, configured):
     return url
 
 
-async def _read_provider(session, provider, base_url, key, config, fetch, stats=None):
+async def _read_provider(session, provider, base_url, key, config, fetch, stats=None, baseline_fn=None):
     mode = config.get('mode', MODE_NONE)
     if mode == 'manual':
         used_tokens, used_requests = stats() if stats else (0, 0)
@@ -300,7 +316,10 @@ async def _read_provider(session, provider, base_url, key, config, fetch, stats=
         if mode == 'openai_billing':
             subscription = await fetch(session, _endpoint(base_url, 'dashboard/billing/subscription'), key)
             usage = await fetch(session, _endpoint(base_url, 'dashboard/billing/usage'), key)
-            return build_openai_billing(provider, subscription, usage)
+            baseline = None
+            if baseline_fn and num((usage or {}).get('total_usage')) is not None:
+                baseline = baseline_fn(num(usage.get('total_usage')) / 100.0)
+            return build_openai_billing(provider, subscription, usage, config, baseline)
         if mode == 'amd':
             keyinfo = await fetch(session, _endpoint(base_url, 'key'), key)
             usage = await fetch(session, _endpoint(base_url, 'usage'), key)
@@ -336,6 +355,36 @@ def install(app, settings, state):
                 'remaining_path': row[4] or '', 'unit': row[5] or 'usd', 'label': row[6] or '',
                 'limit_value': row[7], 'reset': row[8] or 'day', 'price_per_million': row[9],
                 'manual_remaining': row[10], 'timezone': row[11] or 'Asia/Shanghai', 'models': row[12] or ''}
+
+    def ensure_baseline(provider, config, cumulative):
+        """Once per local day, remember the cumulative counter as today's zero point.
+
+        A manual anchor calibrates the start of the day: if the operator types the
+        panel's current available amount, today's usage becomes limit-anchor instead
+        of 0, so the first reading of the day is not blind.
+        """
+        from datetime import datetime
+        try:
+            from zoneinfo import ZoneInfo
+            day = datetime.now(ZoneInfo(config.get('timezone') or 'Asia/Shanghai')).date().isoformat()
+        except Exception:
+            day = datetime.now().date().isoformat()
+        db().execute('CREATE TABLE IF NOT EXISTS usage_baselines(provider TEXT PRIMARY KEY, day TEXT NOT NULL, value REAL NOT NULL, captured_at REAL NOT NULL)')
+        row = db().execute('SELECT day,value FROM usage_baselines WHERE provider=?', (provider,)).fetchone()
+        if row and row[0] == day:
+            return row[1]
+        limit = num(config.get('limit_value'))
+        manual = num(config.get('manual_remaining'))
+        base = cumulative
+        if limit is not None and manual is not None:
+            base = cumulative - (limit - manual)
+            # One-shot calibration: the anchor describes today, so drop it after use
+            # instead of carrying it into tomorrow's baseline.
+            with db():
+                db().execute('UPDATE provider_usage SET manual_remaining=NULL WHERE provider=?', (provider,))
+        with db():
+            db().execute('INSERT OR REPLACE INTO usage_baselines VALUES(?,?,?,?)', (provider, day, base, time.time()))
+        return base
 
     def audit_stats(config):
         """Tokens and request count for this provider's window, from the audit DB."""
@@ -424,7 +473,8 @@ def install(app, settings, state):
                 fetch_fn = state.get('usage_fetch_override') or fetch
                 used = await _read_provider(session, provider, provider_entry.get('base_url', ''),
                                             provider_entry.get('api', provider_entry.get('key', '')), config, fetch_fn,
-                                            stats=lambda: audit_stats(config))
+                                            stats=lambda: audit_stats(config),
+                                            baseline_fn=lambda cumulative: ensure_baseline(provider, config, cumulative))
                 cached = used if used is None else {'provider': provider, 'mode': mode,
                                                     'ok': used.get('ok'), 'used': used.get('used'),
                                                     'total': used.get('total'), 'remaining': used.get('remaining'),
@@ -519,6 +569,8 @@ def install(app, settings, state):
                           numeric['manual_remaining'], timezone_name, models))
         with db():
             db().execute('DELETE FROM usage_readings WHERE provider=?', (provider,))
+            db().execute('CREATE TABLE IF NOT EXISTS usage_baselines(provider TEXT PRIMARY KEY, day TEXT NOT NULL, value REAL NOT NULL, captured_at REAL NOT NULL)')
+            db().execute('DELETE FROM usage_baselines WHERE provider=?', (provider,))
         return web.json_response({'saved': {'provider': provider, 'mode': mode}})
 
     async def refresh_handler(r):

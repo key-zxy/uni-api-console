@@ -166,6 +166,7 @@
             <option value="custom">自定义（URL + JSON 路径）</option>
           </select></label>
           <div id="balance-manual-fields" hidden>
+            <p class="hint">本地统计与 OpenAI 计费共用这些额度设置：本地统计按请求日志累计，OpenAI 计费用上游累计值减每日基线。</p>
             <label class="field"><span>限额（按下面的单位与周期）</span><input id="balance-limit" type="number" min="0" step="any" placeholder="80"></label>
             <label class="field"><span>重置周期</span><select id="balance-reset">
               <option value="day">每日重置</option><option value="total">永久累计</option>

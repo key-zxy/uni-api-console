@@ -663,7 +663,7 @@ function toggleBalanceCustom() {
   const custom = $('balance-custom-fields');
   if (custom) custom.hidden = mode !== 'custom';
   const manual = $('balance-manual-fields');
-  if (manual) manual.hidden = mode !== 'manual';
+  if (manual) manual.hidden = !(mode === 'manual' || mode === 'openai_billing');
 }
 
 function openBalanceDialog(item) {
